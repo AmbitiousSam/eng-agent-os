@@ -1,0 +1,119 @@
+# EAOS routing — who activates, when, and on which model.
+# The orchestrator reads this at INTAKE after requirements tags the task.
+
+# ---- Complexity scale (set by requirements-analyst) ----
+complexity_levels: [trivial, small, standard, complex]   # 0..3
+
+# ---- Task kind (set by requirements-analyst; drives the flow) ----
+task_kinds: [feature, bug, refactor, chore]
+# greenfield = brand-new repo/service with no existing code to map.
+greenfield_signal: new-repo
+
+# ---- Signals the analyst may tag (extend freely) ----
+signals:
+  - db-schema-change
+  - data-migration
+  - public-api
+  - auth
+  - pii
+  - payments
+  - infra
+  - ci-change
+  - perf-critical
+  - new-service
+  - breaking-change
+  - slo-impacting
+  - ui
+
+# ---- Activation rules ----
+agents:
+  always: [requirements, developer, code-reviewer]   # every non-trivial task
+
+  conditional:
+    codebase-analyst:
+      # The navigator. Runs at GROUND for ANY task touching existing code (i.e. not greenfield).
+      # Builds/refreshes the repo map and the per-task impact map; reproduces bugs.
+      when: "NOT greenfield"
+    architect:
+      when: "complexity>=standard OR new-service OR breaking-change OR perf-critical"
+    qa-engineer:
+      when: "complexity>=small OR public-api OR data-migration OR payments"
+    security-reviewer:
+      when: "auth OR pii OR payments OR public-api OR new-service"
+    devops-engineer:
+      when: "infra OR new-service OR ci-change OR breaking-change"
+    platform-engineer:
+      when: "new-service OR perf-critical OR infra"
+    sre-observability:
+      when: "new-service OR perf-critical OR slo-impacting"
+    tech-writer:
+      when: "public-api OR new-service OR complexity>=standard"
+
+  # On trivial tasks, skip the loop entirely; only developer + quick self-review run.
+  skip_when_trivial:
+    [architect, qa-engineer, security-reviewer, devops-engineer,
+     platform-engineer, sre-observability, tech-writer]
+
+# ---- Model routing (tiers map to current Claude lineup) ----
+models:
+  tiers:
+    reasoning: opus      # Opus 4.8  — planning, architecture, threat modeling, hard calls
+    coding:    sonnet    # Sonnet 4.6 — implementation, tests, diff review, pipelines
+    cheap:     haiku     # Haiku 4.5  — docs, summaries, formatting, routine checks
+
+  by_agent:
+    orchestrator:       reasoning
+    requirements:       reasoning
+    codebase-analyst:   coding      # tracing code + grep; escalate to reasoning for gnarly bugs
+    architect:          reasoning
+    platform-engineer:  reasoning
+    security-reviewer:  reasoning
+    developer:          coding
+    qa-engineer:        coding
+    code-reviewer:      coding
+    devops-engineer:    coding
+    sre-observability:  coding
+    tech-writer:        cheap
+
+  # Per-call escalation/de-escalation overrides.
+  escalate_when:
+    - "code-reviewer AND review_severity==block -> reasoning"
+    - "code-reviewer AND signals contains (auth|payments|pii) -> reasoning"
+  deescalate_when:
+    - "any agent summarize/format sub-step -> cheap"
+
+# ---- Efficiency guards ----
+budget:
+  default_tokens_per_task: 250000
+  on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value]
+parallelism:
+  within_phase: true        # independent agents in a phase run concurrently
+  fan_out_test: "only split work you could hand to separate engineers w/ no further talk"
+loop_guard:
+  max_same_issue_loops: 3   # then escalate deadlock to human
+
+# ---- Autonomy (the run is autonomous except at these human gates) ----
+autonomy:
+  mode: autonomous          # autonomous | supervised (supervised = confirm each phase)
+  human_gates:
+    - blocking_product_question      # a decision only the human can make
+    - irreducible_product_tradeoff   # not a technical disagreement (those auto-resolve)
+    - deadlock                       # same issue loops > loop_guard.max_same_issue_loops
+    - destructive_action             # deploy / push / migrate / spend money — always confirm
+    - unmitigable_high_sev_security  # security block with no automatic mitigation
+  auto_proceed:               # never ask permission for these
+    [routing, design, implementation, review_loops, testing, documentation, write_deploy_guide]
+
+# ---- Re-routing after GROUND ----
+# The impact map can reveal danger zones the intake didn't (e.g. the change touches the auth
+# module). Those become signals that re-run the conditional rules above BEFORE planning — so
+# security/platform/etc. get pulled in based on what the code actually shows, not just the ask.
+reroute_after_ground: true
+
+# ---- Runtime layout (project-local; created on first run) ----
+runtime:
+  root: ".eaos"                       # per-project
+  task_dir: ".eaos/<task-id>/"        # warroom.md + artifacts/ (incl. impact-map.md)
+  memory: ".eaos/memory/"             # decisions/ patterns/ lessons/
+  codebase_map: ".eaos/memory/codebase/map.md"   # cached repo map (+ map.meta git SHA)
+config_home: "~/.claude/eaos/"        # routing.yaml, protocol.md, loop.md, templates/

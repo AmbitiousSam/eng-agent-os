@@ -1,0 +1,9 @@
+# Cloned at setup time (not part of the OS source)
+vendor/
+
+# Per-project runtime state created by /agentic-os
+.eaos/
+
+# OS noise
+.DS_Store
+*.log
