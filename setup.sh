@@ -42,9 +42,11 @@ say "Installing EAOS engineering agents -> $AGENTS_DIR"
 cp -f "$EAOS_DIR/agents/"*.md "$AGENTS_DIR/" 2>/dev/null || true
 rm -f "$AGENTS_DIR/README.md" 2>/dev/null || true   # don't install the folder readme as an agent
 
-# 4) Install the /agentic-os slash command (the autonomous orchestrator driver).
-say "Installing /agentic-os command -> $COMMANDS_DIR"
-cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/"
+# 4) Install the slash command (the autonomous orchestrator driver).
+#    Registered under BOTH /agentic-os and /agent-os so either name works.
+say "Installing /agentic-os (+ /agent-os alias) command -> $COMMANDS_DIR"
+cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
+cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agent-os.md"
 
 # 5) Install global OS config the command reads at runtime.
 say "Installing OS config -> $CONFIG_DIR"
@@ -59,8 +61,13 @@ say "Installing EAOS skills -> $SKILLS_DIR"
 for d in "$EAOS_DIR/skills/"*/; do [ -d "$d" ] && cp -rf "$d" "$SKILLS_DIR/"; done
 
 say ""
+say "Verifying install:"
+for f in commands/agentic-os.md commands/agent-os.md agents/orchestrator.md agents/codebase-analyst.md eaos/routing.yaml; do
+  if [ -e "$CLAUDE_DIR/$f" ]; then printf "  \033[0;32m✓\033[0m %s\n" "~/.claude/$f"; else printf "  \033[0;31m✗ MISSING\033[0m %s\n" "~/.claude/$f"; fi
+done
+say ""
 say "Installed. Runtime state is PROJECT-LOCAL: each run creates ./.eaos/<task-id>/ where you"
 say "invoke it (war room, artifacts) plus ./.eaos/memory/ (decisions, patterns, lessons)."
 say ""
-say "Usage — from inside any project, in Claude Code:"
-say "    /agentic-os Add per-API-key rate limiting to the public REST API"
+say "Usage — from inside any project, in Claude Code (RESTART Claude Code after first install):"
+say "    /agentic-os <task>      (alias: /agent-os <task>)"

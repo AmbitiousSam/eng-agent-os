@@ -22,6 +22,17 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in. Run: gh auth login"
 
 [ "$VISIBILITY" = "public" ] || [ "$VISIBILITY" = "private" ] || die "visibility must be public|private"
 
+# --- Validate BEFORE committing/pushing (push only after validation) ---
+say "Validating repo before push..."
+bash -n setup.sh || die "setup.sh failed syntax check — not pushing."
+bash -n scripts/eaos-doctor.sh || die "eaos-doctor.sh failed syntax check — not pushing."
+if command -v python3 >/dev/null 2>&1; then
+  python3 scripts/validate-eaos.py || die "validate-eaos.py reported errors — not pushing. Fix them first."
+else
+  die "python3 not found — cannot validate. Refusing to push unvalidated."
+fi
+say "Validation passed."
+
 # Initialize git if needed.
 if [ ! -d .git ]; then
   say "Initializing git repo..."

@@ -54,12 +54,17 @@ agents:
     [architect, qa-engineer, security-reviewer, devops-engineer,
      platform-engineer, sre-observability, tech-writer]
 
-# ---- Model routing (tiers map to current Claude lineup) ----
+# ---- Model routing ----
+# Tiers are ABSTRACT. Map each tier to whatever models your harness exposes. The values below
+# use Claude Code's FAMILY aliases (opus/sonnet/haiku), which auto-track the latest version in
+# that family — so this config does not go stale. To pin a version or use another provider,
+# change ONLY these three values; every agent references the tier name, not a model. (Concrete
+# examples as of 2026: reasoning≈Opus 4.8, coding≈Sonnet 4.6, cheap≈Haiku 4.5 — informational.)
 models:
   tiers:
-    reasoning: opus      # Opus 4.8  — planning, architecture, threat modeling, hard calls
-    coding:    sonnet    # Sonnet 4.6 — implementation, tests, diff review, pipelines
-    cheap:     haiku     # Haiku 4.5  — docs, summaries, formatting, routine checks
+    reasoning: opus      # planning, architecture, threat modeling, hard calls
+    coding:    sonnet    # implementation, tests, diff review, pipelines
+    cheap:     haiku     # docs, summaries, formatting, routine checks
 
   by_agent:
     orchestrator:       reasoning
@@ -103,6 +108,44 @@ autonomy:
     - unmitigable_high_sev_security  # security block with no automatic mitigation
   auto_proceed:               # never ask permission for these
     [routing, design, implementation, review_loops, testing, documentation, write_deploy_guide]
+
+  # ---- Pre-push gate: self-review, THEN code checks. NEVER push until both pass. ----
+  pre_push:
+    # 1) Self-review: the agent reviews its OWN work before pushing (don't push unreviewed code).
+    self_review:
+      reviewer: code-reviewer        # re-run on the FINAL diff (fresh pass, not the earlier one)
+      checklist:
+        - diff matches spec + design and stays within the impact map (no scope creep)
+        - every prior REVIEW finding and QA bug is actually resolved
+        - no leftovers: debug logs, TODOs, commented-out code, dead code
+        - no secrets/keys/tokens or .env committed
+        - acceptance criteria all met
+      on_fail: loop_to_implement     # fix first; never push unreviewed/flagged code
+    # 2) Code checks: the PROJECT's own test/build/lint (not EAOS's structural validator).
+    code_checks:
+      required: [test, build, lint]  # run all that exist; a missing one is skipped, not failed
+      source: ".eaos/memory/codebase/map.md"   # verified commands live here
+      on_red: loop_to_implement      # fix first; never push failing code
+    push_is_destructive: true        # still human-confirmed even when green (see human_gates)
+  # Bias hard toward making a reasonable assumption and continuing. Asking is the exception.
+  clarification:
+    default: assume_and_proceed     # record the assumption in the spec; the human can correct later
+    max_questions_per_run: 3        # hard cap; batch into ONE round, never trickle
+    ask_only_if_ALL_true:
+      - changes_approach            # the answer materially changes design/scope (not cosmetic)
+      - not_inferable               # can't be inferred from codebase, conventions, task text, or a sane default
+      - expensive_to_reverse        # guessing wrong means real rework, not a quick edit
+    never_ask_about:                # decide these yourself and note the choice
+      - naming, wording, copy
+      - reversible/low-cost choices (a library you can swap, a default value)
+      - style/formatting/anything lint or convention already answers
+      - anything the codebase or existing patterns already demonstrate
+    examples:
+      ask: ["per-API-key vs per-IP rate limiting (changes the whole design)",
+            "should deleting an account hard-delete or soft-delete user data (irreversible, legal)"]
+      assume: ["which date format to show (pick locale default, note it)",
+               "button label / spacing (pick sensible, proceed)",
+               "which test runner (use the repo's existing one)"]
 
 # ---- Re-routing after GROUND ----
 # The impact map can reveal danger zones the intake didn't (e.g. the change touches the auth

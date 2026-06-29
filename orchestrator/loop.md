@@ -12,7 +12,7 @@ Any phase may route work backward (the iteration loop).
 | **IMPLEMENT** | design approved | developer (qa writes tests in parallel) | code compiles; self-tests pass; PR description done |
 | **REVIEW** | implementation ready | code-reviewer (+security if signaled) | review `approve`; no blocking findings |
 | **TEST/QA** | review approved | qa-engineer | acceptance criteria pass; critical paths covered |
-| **DEPLOY/OPS** | tests pass | devops + platform + sre (as signaled) | deploy guide with tested rollback path |
+| **DEPLOY/OPS** | tests pass | devops + platform + sre (as signaled) | deploy guide with tested rollback path; **project code checks (test/build/lint) green before any push/PR** |
 | **DOCUMENT** | feature complete | tech-writer | docs reference real artifacts; quick accuracy check passes |
 | **STABILIZE** | all above done | orchestrator | final package assembled; retro + patterns written to memory |
 

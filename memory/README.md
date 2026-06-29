@@ -23,3 +23,16 @@ tree every time. See `agents/codebase-analyst.md` and `skills/codebase-map`.
 - ADRs are append-only; supersede with a new ADR rather than editing.
 - Before deriving a design, check `decisions/` and `patterns/` for an existing answer.
 - A pattern is promoted from a lesson only after it's worked on ≥2 tasks.
+
+**Retention (so memory doesn't become a context swamp)**
+- **`index.md`** is the only thing always loaded at PLAN — a one-line summary + link per active
+  decision/pattern. Full files are pulled only when relevant. Keep the index curated.
+- **Decisions** carry a `Status` and an optional `Superseded-by: ADR-NNN`. The orchestrator
+  loads only `accepted` ADRs; superseded ones stay for history but are skipped.
+- **Patterns** that haven't been used in N tasks (default 10) get archived to
+  `patterns/_archive/` and dropped from the index.
+- **Lessons** older than a release can be summarized into a pattern (or pruned); they're
+  retrospective notes, not long-term truth.
+- **Codebase map** is regenerated on git drift; it's a cache, never hand-edited.
+- Periodically run a memory pass: merge duplicate patterns, mark stale decisions superseded,
+  and rebuild `index.md`. Store conclusions, never transcripts.

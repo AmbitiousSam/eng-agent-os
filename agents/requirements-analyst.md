@@ -24,5 +24,16 @@ against. Make the implicit explicit. Do not design or implement.
 
 **May send:** `PROPOSE` (the spec), `QUESTION` (blocking clarifications), `RISK`, `HANDOFF`.
 
-**Rules.** Prefer 1 sharp question over 5 vague ones. Every acceptance criterion must be
-checkable by QA. If you cannot tag complexity/signals confidently, say why and ask.
+**Rules.**
+- **Default to assumptions, not questions.** For anything underspecified, pick the most
+  reasonable interpretation, record it under **Assumptions**, and proceed. Letting the human
+  correct at the end is cheaper than interrupting them up front.
+- **Mark a question `blocking` ONLY if ALL three hold** (see `routing.yaml > autonomy.clarification`):
+  it materially changes the approach, it can't be inferred from the codebase/conventions/task/
+  a sane default, AND guessing wrong means real rework. Otherwise it's an assumption, not a question.
+- **Never** ask about naming, wording, reversible/low-cost choices, style, or anything the
+  codebase already demonstrates — decide and note it.
+- **Cap blocking questions at `max_questions_per_run` and batch into one round.** If you have
+  zero genuine blockers (the common case), emit none and hand off.
+- Every acceptance criterion must be checkable by QA. If complexity/signals are unclear, make a
+  best-effort tag and note the uncertainty — don't block on it.

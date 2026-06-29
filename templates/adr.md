@@ -1,6 +1,7 @@
 # ADR-NNN: <decision title>
 
-- **Status:** accepted
+- **Status:** accepted        <!-- accepted | superseded -->
+- **Superseded-by:** —        <!-- ADR-NNN, when replaced (orchestrator skips superseded ADRs) -->
 - **Date:** YYYY-MM-DD
 - **Task:** T-NNN
 - **Deciders:** <agents>

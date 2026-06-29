@@ -120,12 +120,25 @@ Append the analyst's messages (PROPOSE map, any QUESTION/RISK) to the war room.
 
 ---
 
-## Step 3 — CLARIFY (human gate)
+## Step 3 — CLARIFY (human gate — used sparingly)
 
-If there are any `blocking` open questions — from intake OR surfaced by GROUND (e.g. "there are
-two auth modules, which one?") — **stop and ask the human** as a short numbered list and wait.
-Record answers as DECISION messages. Non-blocking (`fyi`) questions: note and proceed. Do not
-start design with blocking questions open.
+**Default: do NOT ask. Assume and proceed.** Most runs should pass through this step without
+asking the human anything. Asking is the exception, not the routine.
+
+Apply the bar in `routing.yaml > autonomy.clarification`. Only pause for a question if **ALL**
+are true: it materially changes the approach, it can't be inferred from the codebase /
+conventions / the task text / a sane default, AND guessing wrong means real rework. For
+everything else, pick the most reasonable option, record it as an **Assumption** in the spec,
+and keep going — the human can correct at the end.
+
+If (and only if) one or more questions clear that bar:
+- Ask them **all at once**, as a short numbered list, capped at `max_questions_per_run`. Never
+  trickle questions across the run.
+- Record answers as DECISION messages, then continue.
+
+Do not re-ask anything already answered or already covered by an assumption. "Two auth modules —
+which one?" qualifies (changes approach, not inferable). "What should the button say?" does not —
+decide it and note it.
 
 ---
 
@@ -200,11 +213,30 @@ If devops/platform/sre are on the roster:
 - Spawn **platform-engineer** → runtime/scaling/cost fit.
 - Spawn **sre-observability** → SLOs, metrics/logs/traces, alerts, runbook.
 
-**Human gate — destructive actions:** never actually deploy, push, force-push, run migrations,
-or spend money on infra without explicit human confirmation. Produce the guide and *propose*
-the action; ask before executing it.
+**Pre-push gate — required before ANY push/PR (`routing.yaml > autonomy.pre_push`).** Two steps,
+in order. Do not push until both pass.
 
-Exit gate: deploy guide exists with a reasoned rollback.
+**(1) Self-review your own work first.** Re-run **code-reviewer** on the FINAL diff (a fresh
+pass, not the earlier one) and confirm:
+- the diff matches the spec + design and stays within the impact map (no scope creep),
+- every earlier REVIEW finding and QA bug is actually resolved,
+- no leftovers: debug logs, TODOs, commented-out/dead code,
+- no secrets/keys/tokens or `.env` committed,
+- all acceptance criteria are met.
+Any item fails → loop back to Step 5 (IMPLEMENT) and fix. Never push unreviewed or flagged code.
+
+**(2) Run the project's own code checks.** `test`, `build`, `lint` using the verified commands
+from the codebase map (`.eaos/memory/codebase/map.md`; if absent, detect from package.json /
+Makefile / pyproject / cargo / go). Run all that exist (a missing one is skipped, not a failure).
+- **Any check red → do NOT push.** Loop back to Step 5, fix, re-check.
+- **All green → proceed** to propose the push.
+This is separate from EAOS's own structural validator — it's the actual code passing.
+
+**Human gate — destructive actions:** even when checks are green, never actually deploy, push,
+force-push, run migrations, or spend money without explicit human confirmation. Produce the
+guide and *propose* the action; ask before executing it.
+
+Exit gate: deploy guide exists with a reasoned rollback; **code checks green** before any push.
 
 ---
 
