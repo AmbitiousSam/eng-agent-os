@@ -42,19 +42,22 @@ say "Installing EAOS engineering agents -> $AGENTS_DIR"
 cp -f "$EAOS_DIR/agents/"*.md "$AGENTS_DIR/" 2>/dev/null || true
 rm -f "$AGENTS_DIR/README.md" 2>/dev/null || true   # don't install the folder readme as an agent
 
-# 4) Install the slash command (the autonomous orchestrator driver).
-#    Registered under BOTH /agentic-os and /agent-os so either name works.
-say "Installing /agentic-os (+ /agent-os alias) command -> $COMMANDS_DIR"
+# 4) Install the slash commands.
+#    /agentic-os is registered under BOTH /agentic-os and /agent-os so either name works.
+say "Installing /agentic-os (+ /agent-os alias) + /incident commands -> $COMMANDS_DIR"
 cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
 cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agent-os.md"
+cp -f "$EAOS_DIR/commands/incident.md"   "$COMMANDS_DIR/incident.md"
 
 # 5) Install global OS config the command reads at runtime.
 say "Installing OS config -> $CONFIG_DIR"
+mkdir -p "$CONFIG_DIR/templates" "$CONFIG_DIR/playbooks"
 cp -f "$EAOS_DIR/orchestrator/routing.yaml"   "$CONFIG_DIR/"
 cp -f "$EAOS_DIR/orchestrator/protocol.md"    "$CONFIG_DIR/"
 cp -f "$EAOS_DIR/orchestrator/loop.md"        "$CONFIG_DIR/"
 cp -f "$EAOS_DIR/orchestrator/orchestrator.md" "$CONFIG_DIR/"
 cp -f "$EAOS_DIR/templates/"*.md              "$CONFIG_DIR/templates/"
+cp -f "$EAOS_DIR/playbooks/"*.md              "$CONFIG_DIR/playbooks/"   # process playbooks (kernel selects one)
 
 # 6) Install EAOS skills.
 say "Installing EAOS skills -> $SKILLS_DIR"

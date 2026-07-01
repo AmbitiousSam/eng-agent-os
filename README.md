@@ -82,13 +82,28 @@ writes its own artifacts, and returns protocol messages; the orchestrator append
 | `setup.sh` | Bootstrap: install command, personas, skills, config (+ optional agency-agents) |
 | `scripts/` | `validate-eaos.py`, `eaos-doctor.sh`, `push-to-github.sh` |
 | `Makefile` | `make install / doctor / validate / test` |
-| `orchestrator/` | Orchestrator role spec + routing rules + message protocol + loop state machine |
+| `orchestrator/` | The **kernel**: orchestrator role + routing + protocol + the loop *runner* |
+| `playbooks/` | **Processes** (feature-delivery, bug-fix, …) that ride on the kernel |
 | `agents/` | The 11 engineering personas incl. `codebase-analyst` (+ relation to agency-agents) |
 | `skills/` | Reusable procedures (intake, test-plan, deploy guide, codebase-map, bug-triage) |
 | `templates/` | Output templates (spec, design, ADR, review, test plan, impact/codebase map) |
 | `memory/` | Durable project knowledge (decisions / patterns / lessons / codebase map) |
 | `CUSTOMIZE.md` · `RUN.md` · `docs/IDE-SETUP.md` | Customization, Claude Code run guide, Cursor/Windsurf adapters |
 | `examples/` · `ROADMAP.md` | Worked walkthrough · phased build plan + business pack |
+
+## Kernel + playbooks (v2)
+
+EAOS separates a constant **kernel** from pluggable **playbooks**:
+
+- **Kernel** (`orchestrator/`) — orchestrator, protocol, war room, memory, human gates, and the
+  pre-push gate. Never changes per process.
+- **Playbooks** (`playbooks/`) — a process = phases + roster + gates + exit condition. The loop
+  runner selects one by task `kind`/command and runs it under the kernel. `feature-delivery` is
+  the default; `bug-fix` for `kind: bug`. Adding a process (incident-response, rfc, release…) is
+  *one file* + a line in `routing.yaml > playbooks` — the engine is untouched.
+
+This is what lets EAOS grow toward a full engineering-org lifecycle without rewrites: every new
+way of working is a playbook on the same kernel.
 
 ## Modes — it knows when *not* to activate itself
 

@@ -1,45 +1,45 @@
-# EAOS Engineering Loop (state machine)
+# EAOS Loop Runner (kernel)
 
-Each phase has an **entry gate**, **participants** (from `routing.yaml`), and an **exit gate**.
-Any phase may route work backward (the iteration loop).
+This is the **kernel loop runner**. It does not hardcode one process anymore — it **selects a
+playbook** and runs that playbook's phases under kernel rules. The playbooks live in
+`playbooks/` (see `playbooks/README.md`). This keeps the engine constant while processes
+(feature, bug, incident, rfc, release…) plug in as files.
 
-| Phase | Entry gate | Participants | Exit gate |
-|---|---|---|---|
-| **INTAKE** | task received | requirements (+qa reads) | `task-spec.md` with acceptance criteria + complexity + kind + signals |
-| **GROUND** | task touches existing code (not greenfield) | codebase-analyst | repo map fresh + `impact-map.md` written; for bugs, a **reproduction** + root cause |
-| **CLARIFY** | open blocking questions exist (incl. ones GROUND surfaced) | analyst/dev/architect → human | no `blocking` questions remain |
-| **PLAN/DESIGN** | spec approved | architect + developer (+platform/security if signaled) | design approved as buildable; no open high-sev risk; ADRs written |
-| **IMPLEMENT** | design approved | developer (qa writes tests in parallel) | code compiles; self-tests pass; PR description done |
-| **REVIEW** | implementation ready | code-reviewer (+security if signaled) | review `approve`; no blocking findings |
-| **TEST/QA** | review approved | qa-engineer | acceptance criteria pass; critical paths covered |
-| **DEPLOY/OPS** | tests pass | devops + platform + sre (as signaled) | deploy guide with tested rollback path; **project code checks (test/build/lint) green before any push/PR** |
-| **DOCUMENT** | feature complete | tech-writer | docs reference real artifacts; quick accuracy check passes |
-| **STABILIZE** | all above done | orchestrator | final package assembled; retro + patterns written to memory |
+## How the runner works
+1. **Select the playbook** from `routing.yaml > playbooks` by `trigger` (task `kind`) or an
+   explicit command (`/agentic-os` → feature-delivery/bug-fix; `/incident` → incident-response…).
+2. **Load its phases + roster.** The roster's `always` agents run; `optional` agents activate
+   per the conditional signal rules in `routing.yaml`.
+3. **Run each phase** with its entry/exit gate. The kernel behaviors below apply to *every*
+   playbook — a playbook never redefines them.
 
-## Backward edges (iteration)
-- REVIEW `request-changes` → IMPLEMENT
-- TEST/QA bug → IMPLEMENT
-- IMPLEMENT finds impact map was wrong (extra files needed) → GROUND (re-localize)
-- PLAN risk discovered during IMPLEMENT → PLAN/DESIGN
-- CLARIFY answer changes scope → INTAKE (re-spec)
-- GROUND surfaces a danger zone → re-run routing (pull security/platform) before PLAN
+## Kernel behaviors inherited by every playbook
+- **Protocol & war room** — orchestrator is the sole writer; agents return messages (`protocol.md`).
+- **Human gates & clarification policy** — assume-and-proceed default; stop only at the bar
+  (`routing.yaml > autonomy`).
+- **Pre-push gate** — self-review (maker≠checker) then project code checks, before any push
+  (`routing.yaml > autonomy.pre_push`).
+- **Memory** — read at PLAN, written at STABILIZE (`memory/`).
+- **Gate enforcement** — a phase does not advance until its exit gate is met; unmet gates
+  (missing info, hard disagreement, loop > `loop_guard.max_same_issue_loops`) escalate to the
+  human with a one-paragraph blocker summary.
+- **Backward edges (iteration)** — any phase may route work backward:
+  - REVIEW `request-changes` → IMPLEMENT
+  - TEST bug → IMPLEMENT
+  - IMPLEMENT finds impact map wrong → GROUND (re-localize)
+  - PLAN risk found during IMPLEMENT → PLAN
+  - CLARIFY answer changes scope → INTAKE (re-spec)
+  - GROUND surfaces a danger zone → re-run routing before PLAN
+- **Trivial fast-path** — `complexity == trivial` → quick localize → developer + self-review →
+  STABILIZE. No full war room, no specialists.
+- **Greenfield path** — nothing to map → GROUND skipped; structure established during PLAN and
+  mapped at STABILIZE for future tasks.
 
-## Bug sub-flow (kind == bug)
-GROUND runs `bug-triage`: **reproduce → locate → root-cause** (a failing test is the ideal
-repro). The bug is not "understood" until reproduced; if it can't be reproduced, escalate to
-the human. IMPLEMENT applies the **minimal** fix; TEST/QA confirms the repro test now passes
-and keeps it as a permanent regression test, then runs the existing suite for collateral.
+## The default process
+The default playbook is **`playbooks/feature-delivery.md`** (and **`bug-fix.md`** when
+`kind == bug`). These contain the phase tables that used to live in this file — `/agentic-os`
+behaves exactly as before; the process was simply extracted into playbooks so new ones (e.g.
+`incident-response`) drop in without touching the kernel.
 
-## Trivial fast-path
-`complexity == trivial` → (quick `grep`/read to confirm the one spot) → developer makes change
-+ self-review → STABILIZE. No full war room, no specialists. A trivial change still gets a
-2-minute localization so it lands in the right place.
-
-## Greenfield path
-`greenfield` (new repo, nothing to map) → GROUND is skipped; architect/developer establish the
-initial structure, which the codebase-analyst maps at STABILIZE for future tasks.
-
-## Gate enforcement
-The orchestrator will not advance a phase until its exit gate is met. If a gate cannot be met
-(missing info, hard disagreement, repeated loop > `loop_guard.max_same_issue_loops`), it
-escalates to the human with a one-paragraph summary of the blocker.
+> Adding a process = add a file under `playbooks/` + register it in `routing.yaml > playbooks`.
+> The runner and all kernel behaviors above are reused unchanged.

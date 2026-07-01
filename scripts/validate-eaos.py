@@ -127,6 +127,37 @@ if routing and isinstance(routing.get("models", {}), dict):
     by_agent = routing["models"].get("by_agent", {})
     check_names(list(by_agent.keys()), "models.by_agent")
 
+# ---------- 4b. playbooks: frontmatter + roster agents exist + registry files exist ----------
+playbook_names = set()
+pb_dir = os.path.join(ROOT, "playbooks")
+if os.path.isdir(pb_dir):
+    for f in sorted(os.listdir(pb_dir)):
+        if not f.endswith(".md") or f.lower() == "readme.md":
+            continue
+        rel = f"playbooks/{f}"
+        fm = frontmatter(read(os.path.join(ROOT, rel)))
+        if not fm:
+            err(f"{rel}: missing YAML frontmatter")
+            continue
+        for field in ["name", "trigger", "roster", "phases"]:
+            if fm.get(field) is None:
+                err(f"{rel}: frontmatter missing '{field}'")
+        if fm.get("name"):
+            playbook_names.add(fm["name"])
+        roster = fm.get("roster") or {}
+        if isinstance(roster, dict):
+            for grp in ("always", "optional"):
+                for n in roster.get(grp, []) or []:
+                    (ok if n in agent_names else err)(f"{rel}: roster '{grp}' agent '{n}' → persona exists")
+    if playbook_names:
+        ok(f"{len(playbook_names)} playbooks with valid frontmatter: {', '.join(sorted(playbook_names))}")
+# registry in routing.yaml must point at real playbook files
+if routing and isinstance(routing.get("playbooks"), dict):
+    for pname, spec in routing["playbooks"].items():
+        f = (spec or {}).get("file")
+        if f:
+            (ok if exists(f) else err)(f"routing.playbooks['{pname}'].file exists: {f}")
+
 # ---------- 5. skills have SKILL.md + frontmatter ----------
 skills_dir = os.path.join(ROOT, "skills")
 if os.path.isdir(skills_dir):

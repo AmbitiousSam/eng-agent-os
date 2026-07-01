@@ -15,7 +15,7 @@ echo "========================================"
 
 echo "Installation (~/.claude):"
 [ -d "$CLAUDE_DIR" ] && pass "$CLAUDE_DIR exists" || bad "$CLAUDE_DIR missing — run ./setup.sh"
-for f in commands/agentic-os.md commands/agent-os.md eaos/routing.yaml eaos/protocol.md eaos/loop.md; do
+for f in commands/agentic-os.md commands/agent-os.md commands/incident.md eaos/routing.yaml eaos/protocol.md eaos/loop.md; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
 # required agents installed

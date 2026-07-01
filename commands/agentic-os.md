@@ -63,7 +63,15 @@ echo "$N"
 - Scan `.eaos/memory/decisions/` and `.eaos/memory/patterns/` — reuse prior ADRs/patterns
   instead of re-deriving them.
 
-Tell the human, in one line: the task id, where the war room is, and that you're starting.
+**Select the playbook.** After INTAKE tags the task `kind`, pick the playbook from
+`~/.claude/eaos/routing.yaml > playbooks` by `trigger` (or the invoking command): `kind: bug`
+→ `bug-fix`, otherwise the `default: true` playbook (`feature-delivery`). Load that playbook's
+phases + roster from `playbooks/<name>.md` and run them under the kernel rules in `loop.md`. If
+a dedicated command was used (e.g. `/incident`), use that command's registered playbook. Note
+the chosen playbook in the war room.
+
+Tell the human, in one line: the task id, the playbook selected, where the war room is, and
+that you're starting.
 
 ---
 

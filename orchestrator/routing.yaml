@@ -1,13 +1,40 @@
 # EAOS routing — who activates, when, and on which model.
 # The orchestrator reads this at INTAKE after requirements tags the task.
 
+# ---- Playbooks (processes that ride on the constant kernel) ----
+# The loop runner (orchestrator/loop.md) selects one by trigger/command, then runs its phases
+# under kernel rules. Add a process = add a file in playbooks/ + a line here. Kernel behaviors
+# (protocol, war room, memory, human gates, pre-push gate) are inherited by all of them.
+playbooks:
+  feature-delivery:
+    file: playbooks/feature-delivery.md
+    command: /agentic-os
+    trigger: "kind in [feature, chore] OR default"
+    default: true
+  bug-fix:
+    file: playbooks/bug-fix.md
+    command: /agentic-os
+    trigger: "kind == bug"
+  # incident-response is your SRE project — register it here when the file exists:
+  # incident-response:
+  #   file: playbooks/incident-response.md
+  #   command: /incident
+  #   trigger: "kind == incident"
+
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
 
-# ---- Task kind (set by requirements-analyst; drives the flow) ----
-task_kinds: [feature, bug, refactor, chore]
+# ---- Task kind (set by requirements-analyst; drives the flow + playbook selection) ----
+task_kinds: [feature, bug, refactor, chore, incident]
 # greenfield = brand-new repo/service with no existing code to map.
 greenfield_signal: new-repo
+
+# ---- Incident primitives (rails for the incident-response playbook) ----
+incident:
+  severity_levels: [sev1, sev2, sev3, sev4]   # sev1 = highest impact
+  mitigate_before_root_cause: true            # stop the bleeding first; diagnose after
+  postmortem: blameless                       # COE-style; written to memory/lessons via templates/postmortem.md
+  fast_gates: true                            # incidents favor speed; skip non-critical ceremony
 
 # ---- Signals the analyst may tag (extend freely) ----
 signals:
