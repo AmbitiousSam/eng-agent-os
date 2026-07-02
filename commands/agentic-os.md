@@ -72,6 +72,10 @@ echo "$N"
   run the full requirements ceremony first.
 - **Question-shaped** (wants understanding, not a change: "how does…", "why is…", "what would
   it take…") → select `investigation` (read-only), spawn **codebase-analyst**. No spec needed.
+- **Product-shaped** (a whole product, not one change: "build me a X", "MVP", "from scratch")
+  → `kind: product` → **product-framing** playbook. It produces a human-approved PRFAQ and an
+  ordered epic/task backlog — nothing is built until you approve; each task then runs through
+  feature-delivery normally.
 - **Change-shaped** (build/fix/refactor) → proceed to Step 1 INTAKE; the analyst's `kind` then
   confirms `feature-delivery` vs `bug-fix` from `routing.yaml > playbooks`.
 - Ambiguous → default to Step 1 INTAKE (it classifies properly).
@@ -267,6 +271,12 @@ Makefile / pyproject / cargo / go). Run all that exist (a missing one is skipped
 - **All green → proceed** to propose the push.
 This is separate from EAOS's own structural validator — it's the actual code passing.
 
+**Launch review (governance gate).** If `routing.yaml > autonomy.launch_review` marks it
+required (complexity ≥ standard and kind is feature/product): run `templates/launch-review.md`
+with security-reviewer + sre-observability owning their sections, and record the verdict in
+the war room. **GO is a hard precondition** for proposing any push/deploy; NO-GO loops each
+blocking item back to its owning phase and re-runs the review.
+
 **Human gate — destructive actions:** even when checks are green, never actually deploy, push,
 force-push, run migrations, or spend money without explicit human confirmation. Produce the
 guide and *propose* the action; ask before executing it.
@@ -285,9 +295,15 @@ artifacts.
 
 ## Step 10 — STABILIZE & deliver
 
-- **Evaluate (out-of-loop).** Do a final pass scoring the delivery against EACH acceptance
-  criterion: pass/fail + a one-line reason. Record it as a thumbs-up/down summary in the
-  retrospective. This is your regression signal over time.
+- **Independent verify (standard/complex only).** Spawn `verifier` FRESH — give it ONLY the
+  task-spec, the final diff, and the project's check commands. No war-room history, no notes
+  on how it was built. It grades EACH acceptance criterion pass/fail with evidence
+  (file:line, test output), re-runs the suite itself, and returns APPROVE or REJECT.
+- On **REJECT**: go back to Step 5 (IMPLEMENT), relaying the failing criteria via the
+  `sensor-feedback` format (WHAT / EVIDENCE / WHY / FIX DIRECTION / VERIFY) — never a raw
+  dump. Only on APPROVE proceed to assemble the final package.
+- Record the verifier's per-criterion table in the retrospective as the regression signal.
+  (Trivial/small tasks: a brief self-score against criteria suffices.)
 - Assemble the final package: list every artifact in `.eaos/<id>/artifacts/` (code, spec,
   design, ADRs, review, tests, deploy guide, docs).
 - Write a short retrospective to `.eaos/memory/lessons/<id>.md`; promote any reusable solution

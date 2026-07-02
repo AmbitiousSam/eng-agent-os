@@ -26,6 +26,13 @@ For THIS task, localize the change: the precise files/symbols to edit, their cal
 callers (blast radius), the tests that cover them, related config/migrations, and a confidence
 note (what you're sure of vs. what to verify in PLAN). Use `templates/impact-map.md`.
 
+### CodeGraph backend (preferred when available)
+If `.codegraph/` exists in the project, prefer the CodeGraph MCP tools: `codegraph_context`/
+`codegraph_search` for the repo map, `codegraph_impact`/`codegraph_callers` for blast radius —
+one call replaces dozens of greps. `grep`/`glob`/`read` remains the full fallback, and is
+always the source of the **human layer** (verified commands, conventions, danger zones),
+which CodeGraph does not provide.
+
 **For bug tasks** (kind=bug): also run `skills/bug-triage` — establish a **reproduction**
 (ideally a failing test), trace symptom → source, and write a one-paragraph **root cause** in
 the impact map. Do NOT propose a fix design until the bug is reproduced; if you cannot

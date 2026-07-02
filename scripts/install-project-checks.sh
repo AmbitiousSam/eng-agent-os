@@ -38,6 +38,10 @@ if [ ! -f .eaos/checks.sh ]; then
     echo "#!/usr/bin/env bash"
     echo "# Project code checks run before every push. Edit freely. Non-zero exit blocks the push."
     echo "set -e"
+    if [ -d .codegraph ] && command -v codegraph >/dev/null 2>&1; then
+      echo "# CodeGraph detected: prefer SCOPED tests (only what the diff affects), full suite as fallback:"
+      echo "#   git diff --name-only HEAD | codegraph affected --stdin --quiet | xargs -r <your-test-runner>"
+    fi
     printf "%b" "$detect"
   } > .eaos/checks.sh
   chmod +x .eaos/checks.sh

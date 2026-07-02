@@ -30,6 +30,11 @@ playbooks:
     command: /agentic-os
     trigger: "kind == question"
     hints: ["how does", "why is", "what would it take", explain, understand, investigate]
+  product-framing:
+    file: playbooks/product-framing.md
+    command: /agentic-os
+    trigger: "kind == product"
+    hints: ["build me a", "new product", "mvp", "from scratch", "startup idea"]
 
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
@@ -38,7 +43,7 @@ complexity_levels: [trivial, small, standard, complex]   # 0..3
 # The front door takes ANY engineering work: build it (feature/chore/refactor), fix it (bug),
 # respond to it (incident), or understand it (question). Kinds without a dedicated playbook
 # route to the default (feature-delivery).
-task_kinds: [feature, bug, refactor, chore, incident, question]
+task_kinds: [feature, bug, refactor, chore, incident, question, product]
 # greenfield = brand-new repo/service with no existing code to map.
 greenfield_signal: new-repo
 
@@ -111,6 +116,7 @@ models:
     requirements:       reasoning
     codebase-analyst:   coding      # tracing code + grep; escalate to reasoning for gnarly bugs
     incident-commander: reasoning   # live-incident diagnosis; correctness under pressure
+    verifier:           reasoning   # independent done-grading; fresh context, hard calls
     architect:          reasoning
     platform-engineer:  reasoning
     security-reviewer:  reasoning
@@ -174,7 +180,20 @@ autonomy:
       required: [test, build, lint]  # run all that exist; a missing one is skipped, not failed
       source: ".eaos/memory/codebase/map.md"   # verified commands live here
       on_red: loop_to_implement      # fix first; never push failing code
+    # 3) Independent verify: a FRESH verifier (no authoring context) grades every acceptance
+    #    criterion with evidence and re-runs the checks itself. Maker≠checker on the stop decision.
+    independent_verify:
+      reviewer: verifier             # spawned fresh; gets only spec + final diff + check commands
+      when: "complexity >= standard" # trivial/small skip this gate
+      on_reject: loop_to_implement   # relay failing criteria via skills/sensor-feedback
     push_is_destructive: true        # still human-confirmed even when green (see human_gates)
+
+  # ---- Launch review (pre-ship governance gate) ----
+  launch_review:
+    required_when: "complexity >= standard AND kind in [feature, product]"
+    checklist: templates/launch-review.md
+    verdict: "GO required before DEPLOY exit; NO-GO loops to owning phase"
+    owners: [security-reviewer, sre-observability]
   # Bias hard toward making a reasonable assumption and continuing. Asking is the exception.
   clarification:
     default: assume_and_proceed     # record the assumption in the spec; the human can correct later
@@ -208,3 +227,10 @@ runtime:
   memory: ".eaos/memory/"             # decisions/ patterns/ lessons/
   codebase_map: ".eaos/memory/codebase/map.md"   # cached repo map (+ map.meta git SHA)
 config_home: "~/.claude/eaos/"        # routing.yaml, protocol.md, loop.md, templates/
+
+# ---- Integrations (optional backends; graceful fallback always) ----
+integrations:
+  codegraph:
+    enabled: auto   # use when .codegraph/ exists in the target project
+    tools: [context, search, impact, callers, affected]
+    fallback: grep  # full grep/glob/read path remains when CodeGraph is absent

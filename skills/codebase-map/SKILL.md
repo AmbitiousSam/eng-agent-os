@@ -10,6 +10,11 @@ description: >
 Produce `.eaos/memory/codebase/map.md` (template: `templates/codebase-map.md`).
 
 ## Build (first run, or full refresh)
+0. **CodeGraph backend (if `.codegraph/` exists):** build structure and entry points from
+   `codegraph_files` + `codegraph_context` instead of grepping, then continue below with the
+   **human layer** — verified commands, conventions, danger zones — which must still be
+   gathered manually (CodeGraph does not provide it). If absent: the grep procedure below,
+   unchanged.
 1. **Read what's already written:** README, CONTRIBUTING, CLAUDE.md/AGENTS.md, docs/, ADRs.
 2. **Detect stack & commands:** read package manifests (package.json, pyproject.toml, go.mod,
    Cargo.toml, pom.xml…), Makefile, Dockerfile, and CI config. Extract the real

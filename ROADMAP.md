@@ -14,33 +14,30 @@ guides, and sensors.
   templates cross-checks), `eaos-doctor.sh`, Makefile, pre-push hooks (repo + per-project).
 - **Companion tool:** `sre-incident-responder` (standalone read-only diagnosis; shares the
   incident brain).
+- **Trust tier:** independent `verifier` (maker≠checker on the done decision, `pre_push.
+  independent_verify`), `fitness-functions` skill (ADRs → enforceable structural tests),
+  `sensor-feedback` skill (failures relayed as WHAT/EVIDENCE/WHY/FIX/VERIFY).
+- **Product tier:** `product-framing` playbook (`kind: product`: FRAME → PRFAQ human gate →
+  epics → sequenced backlog) + prfaq/epic templates; CodeGraph-preferred GROUND with grep
+  fallback (`integrations.codegraph`); GitHub Actions CI (`make test` on push/PR).
+- **Autonomy tier:** `/triage` command + skill (read-only discovery inbox, never auto-starts),
+  `launch-review` governance gate (security/privacy/ORR, GO/NO-GO before ship),
+  `memory-consolidation` skill (supersede/merge/prune + index rebuild).
+- **Smart parallelism** (scales with complexity; sequential for trivial/small) + **IDE
+  adapters** (Cursor/Windsurf-Devin/Codex; same `.eaos/` state across tools).
 
-## Crawl — make the build slice *trustworthy* (next)
-1. **Architecture fitness functions** — architect emits enforceable structural tests with ADRs;
-   design becomes a computational sensor, not prose.
-2. **Sensor fix-instructions** — failing checks return LLM-optimized "how to self-correct"
-   output, not just red.
-3. **Independent verifier** — a no-authoring-memory subagent grades the done-condition
-   (maker≠checker for the stop decision).
-4. **Capture real runs** into `examples/runs/` (war room + artifacts + diff) — evidence over claims.
-5. **CI:** GitHub Actions running `make test` on push.
+## Next (evidence + hardening)
+1. **Capture real runs** into `examples/runs/` (war room + artifacts + diff) — evidence over claims.
+2. **Live-test the adapters** in Cursor/Codex/Devin; tune install paths per tool version.
+3. **Wire the PromptDiagnoser + triage schedule** — cron/scheduled task invoking `/triage`;
+   run-until-verifiable goals once the verifier has a track record.
+4. **Design-review board** for `complex` tasks (multi-reviewer challenge round at PLAN).
 
-## Walk — feel like an org, not a coder
-6. **Framing front-end** — PRFAQ/one-pager intake for product-shaped asks; design-review board
-   gate for `complex` tasks.
-7. **Launch review** — security/privacy/operational-readiness checklist gate before ship.
-8. **Context upgrade** — CodeGraph as GROUND backend + `codegraph affected` for scoped
-   regression (planned; graceful grep fallback).
-9. **Multi-platform installer** — auto-detect Claude Code/Cursor/Windsurf and emit native
-   adapters (CodeGraph's installer pattern).
-
-## Run — autonomy + breadth
-10. **Loop driver** — scheduled discovery/triage automations feeding the front door; triage
-    inbox for the human; run-until-verifiable goals.
-11. **Release/experiment playbooks** — progressive rollout, guardrail metrics (human-executed).
-12. **Harness templates per topology** — bundles of guides+sensors per service shape (Ashby:
-    narrow the variety, deepen the control).
-13. **Memory consolidation** — periodic merge/supersede/prune pass + index rebuild.
+## Run — later
+5. **Release/experiment playbooks** — progressive rollout, guardrail metrics (human-executed).
+6. **Harness templates per topology** — bundles of guides+sensors per service shape (Ashby:
+   narrow the variety, deepen the control).
+7. **Worktree isolation** for heavy fan-out.
 
 ## Horizon — the operating company
 14. **Business pack:** CEO/CTO/PM/finance/marketing personas + opportunity→spec→GTM→build→

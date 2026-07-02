@@ -19,10 +19,10 @@ for f in commands/agentic-os.md commands/agent-os.md commands/incident.md eaos/r
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
 # required agents installed
-need_agents="orchestrator requirements codebase-analyst architect developer code-reviewer qa-engineer security-reviewer devops-engineer platform-engineer sre-observability tech-writer incident-commander"
+need_agents="orchestrator requirements codebase-analyst architect developer code-reviewer qa-engineer security-reviewer devops-engineer platform-engineer sre-observability tech-writer incident-commander verifier"
 miss=""
 for a in $need_agents; do [ -e "$CLAUDE_DIR/agents/$a.md" ] || miss="$miss $a"; done
-[ -z "$miss" ] && pass "all 13 EAOS agents installed" || bad "missing agents:$miss — run ./setup.sh"
+[ -z "$miss" ] && pass "all 14 EAOS agents installed" || bad "missing agents:$miss — run ./setup.sh"
 # skills
 sk_ok=1; for s in requirement-intake test-plan deployment-guide codebase-map bug-triage; do
   [ -e "$CLAUDE_DIR/skills/$s/SKILL.md" ] || sk_ok=0; done
