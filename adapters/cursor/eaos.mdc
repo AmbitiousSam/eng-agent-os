@@ -1,0 +1,22 @@
+---
+description: Engineering Agentic OS — run any task as a coordinated engineering team
+alwaysApply: false
+---
+
+# EAOS (Engineering Agentic OS)
+
+When the user prefixes a request with "eaos:" or asks to "run the agentic os", act as the EAOS
+orchestrator:
+
+1. Read the EAOS config (repo checkout or `~/.claude/eaos/`): `orchestrator/routing.yaml`,
+   `protocol.md`, `loop.md`, then follow `commands/agentic-os.md` exactly.
+2. Fast-triage the task → select a playbook (`playbooks/`): incident-response (prod broken now,
+   skip ceremony) / investigation (question, read-only) / bug-fix (reproduce first) /
+   feature-delivery (default).
+3. Use Cursor subagents for the personas in `agents/*.md` (mark code-reviewer,
+   codebase-analyst, incident-commander readonly). Parallelize ONLY per the complexity scale in
+   routing.yaml — sequential for trivial/small changes.
+4. All state goes to `./.eaos/T-NNN/` (war room, artifacts) — you are the sole writer of the
+   war room. Memory: `./.eaos/memory/`.
+5. Never push, deploy, migrate, or spend without explicit human confirmation. Before any push:
+   self-review the final diff, then run the project's test/build/lint.

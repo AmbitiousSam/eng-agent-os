@@ -5,24 +5,31 @@
 # The loop runner (orchestrator/loop.md) selects one by trigger/command, then runs its phases
 # under kernel rules. Add a process = add a file in playbooks/ + a line here. Kernel behaviors
 # (protocol, war room, memory, human gates, pre-push gate) are inherited by all of them.
+# /agentic-os is the UNIVERSAL front door: fast-triage the description against these hints and
+# route immediately (incidents skip intake ceremony). Dedicated commands are just shortcuts.
 playbooks:
   feature-delivery:
     file: playbooks/feature-delivery.md
     command: /agentic-os
     trigger: "kind in [feature, chore] OR default"
     default: true
+    hints: [add, build, implement, create, refactor, improve, upgrade]
   bug-fix:
     file: playbooks/bug-fix.md
     command: /agentic-os
     trigger: "kind == bug"
+    hints: [bug, broken, fails, wrong, regression, crash, "doesn't work"]
   incident-response:
     file: playbooks/incident-response.md
-    command: /incident
+    command: /incident          # shortcut; /agentic-os reaches it via fast triage
     trigger: "kind == incident"
+    fast_path: true             # skip normal INTAKE; incident-commander's INGEST takes over
+    hints: [outage, down, "5xx", alarm, paged, incident, degraded, "prod is"]
   investigation:
     file: playbooks/investigation.md
     command: /agentic-os
     trigger: "kind == question"
+    hints: ["how does", "why is", "what would it take", explain, understand, investigate]
 
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
@@ -126,8 +133,15 @@ budget:
   default_tokens_per_task: 250000
   on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value]
 parallelism:
-  within_phase: true        # independent agents in a phase run concurrently
+  within_phase: true        # independent agents in a phase MAY run concurrently
   fan_out_test: "only split work you could hand to separate engineers w/ no further talk"
+  # Parallelism must EARN its cost — it scales with complexity, never applied by default:
+  scale_by_complexity:
+    trivial:  none          # one agent, sequential. Parallel here is pure waste.
+    small:    none          # sequential; a second opinion only if review demands it
+    standard: pairs         # at most the proven pairs (dev∥qa-tests, reviewer∥security)
+    complex:  full          # fan out wherever the fan_out_test passes
+  never: "two agents editing the same files, or fan-out on work smaller than its coordination cost"
 loop_guard:
   max_same_issue_loops: 3   # then escalate deadlock to human
 

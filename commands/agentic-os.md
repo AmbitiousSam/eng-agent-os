@@ -63,15 +63,39 @@ echo "$N"
 - Scan `.eaos/memory/decisions/` and `.eaos/memory/patterns/` — reuse prior ADRs/patterns
   instead of re-deriving them.
 
-**Select the playbook.** After INTAKE tags the task `kind`, pick the playbook from
-`~/.claude/eaos/routing.yaml > playbooks` by `trigger` (or the invoking command): `kind: bug`
-→ `bug-fix`, otherwise the `default: true` playbook (`feature-delivery`). Load that playbook's
-phases + roster from `playbooks/<name>.md` and run them under the kernel rules in `loop.md`. If
-a dedicated command was used (e.g. `/incident`), use that command's registered playbook. Note
-the chosen playbook in the war room.
+**FAST TRIAGE (before any ceremony).** Read the task description and classify its shape
+*yourself, immediately* — this one command is the front door for everything, so route first:
 
-Tell the human, in one line: the task id, the playbook selected, where the war room is, and
-that you're starting.
+- **Incident-shaped** (prod is down/degraded NOW: "5xx spike", "alarm firing", "paged",
+  "outage", "users can't...") → select `incident-response` immediately, spawn
+  **incident-commander**, and let its INGEST replace normal INTAKE. Seconds matter; do not
+  run the full requirements ceremony first.
+- **Question-shaped** (wants understanding, not a change: "how does…", "why is…", "what would
+  it take…") → select `investigation` (read-only), spawn **codebase-analyst**. No spec needed.
+- **Change-shaped** (build/fix/refactor) → proceed to Step 1 INTAKE; the analyst's `kind` then
+  confirms `feature-delivery` vs `bug-fix` from `routing.yaml > playbooks`.
+- Ambiguous → default to Step 1 INTAKE (it classifies properly).
+
+Load the selected playbook's phases + roster from `playbooks/<name>.md` and run them under the
+kernel rules in `loop.md`. A dedicated command (e.g. `/incident`) is just a shortcut that
+pre-selects — `/agentic-os` alone must reach every playbook. Note the selection in the war room.
+
+**PARALLELISM (standing rule — but it must EARN its cost).** Parallelism scales with
+complexity (`routing.yaml > parallelism.scale_by_complexity`); it is never the default:
+
+- `trivial` / `small` → **sequential, one agent at a time.** Spawning parallel agents for a
+  textual change or a small fix is pure waste — don't.
+- `standard` → at most the proven pairs: qa-engineer writes tests from the spec WHILE the
+  developer implements; security + code-reviewer examine the same diff simultaneously.
+- `complex` → fan out wherever the fan-out test passes ("could hand to separate engineers
+  with no further conversation"); devops + platform + sre draft DEPLOY artifacts concurrently.
+
+When you do parallelize: spawn all independent work in the same turn (multiple Task calls);
+dependent work waits for its inputs. Never two agents editing the same files, and never
+fan out work smaller than its own coordination cost.
+
+Tell the human, in one line: the task id, the playbook selected, the roster (and what runs in
+parallel), where the war room is, and that you're starting.
 
 ---
 

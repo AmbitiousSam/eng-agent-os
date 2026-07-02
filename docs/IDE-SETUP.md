@@ -1,4 +1,10 @@
-# Using EAOS in other IDEs (Cursor · Windsurf / Devin Desktop)
+# Using EAOS in other IDEs (Cursor · Windsurf / Devin Desktop · Codex)
+
+> **Ready-made adapters now live in [`adapters/`](../adapters/README.md)** — Cursor rule,
+> Windsurf/Devin workflow, and a Codex AGENTS.md snippet. Copy the file into your tool's
+> rules/workflows location and you're done; this doc explains the mapping behind them.
+> Runtime state (`./.eaos/`) is identical across tools, so a task started in Claude Code can
+> be resumed in Cursor or Codex.
 
 EAOS has two layers, and they port differently:
 
