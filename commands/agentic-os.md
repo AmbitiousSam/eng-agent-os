@@ -76,6 +76,11 @@ echo "$N"
   → `kind: product` → **product-framing** playbook. It produces a human-approved PRFAQ and an
   ordered epic/task backlog — nothing is built until you approve; each task then runs through
   feature-delivery normally.
+- **Venture-shaped** (business viability, not engineering: "should we build X", "is there a
+  market", monetization) → `kind: venture` → **venture** playbook (business pack). A GO at its
+  human gate feeds product-framing as normal.
+- **Release-shaped** ("roll out", "canary", "ship to prod") → `kind: release` → **release**
+  playbook (progressive rollout, human executes every step).
 - **Change-shaped** (build/fix/refactor) → proceed to Step 1 INTAKE; the analyst's `kind` then
   confirms `feature-delivery` vs `bug-fix` from `routing.yaml > playbooks`.
 - Ambiguous → default to Step 1 INTAKE (it classifies properly).
@@ -196,6 +201,14 @@ files, and conventions, not an idealized version.
    owns design); **security may hard-veto** a high-severity finding. Record the outcome as an
    ADR; preserve any dissent as a noted RISK.
 5. Append everything to the war room.
+
+- **Design review board (complex only).** If `complexity == complex`, convene the board
+  (`skills/design-review/SKILL.md`) before exiting PLAN: three parallel lens reviews
+  (security/platform/qa), one architect response per OBJECT, security veto binding. PLAN does
+  not exit with unresolved OBJECTs.
+- **Harness instantiation (new services).** On a `new-service` signal, the architect selects
+  the matching topology from `harnesses/` and instantiates it: guides → project rules, sensors
+  → `tests/architecture/` via `skills/fitness-functions` (they ride the pre-push gate forever).
 
 Exit gate: developer agrees the design is buildable AND no open high-severity risk.
 

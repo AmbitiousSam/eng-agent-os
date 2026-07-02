@@ -26,22 +26,23 @@ guides, and sensors.
 - **Smart parallelism** (scales with complexity; sequential for trivial/small) + **IDE
   adapters** (Cursor/Windsurf-Devin/Codex; same `.eaos/` state across tools).
 
-## Next (evidence + hardening)
-1. **Capture real runs** into `examples/runs/` (war room + artifacts + diff) — evidence over claims.
+- **Governance:** design-review board (`complexity == complex`, three lenses, security veto) +
+  release playbook (progressive rollout, pre-committed guardrails, human executes every ramp).
+- **Harness templates** (`harnesses/`): web-api-service, spa-dashboard, event-processor —
+  guide+sensor bundles instantiated at PLAN for new services; worktree-isolation rule for
+  complex fan-out.
+- **Business pack (horizon reached):** ceo-strategist, product-manager, finance-analyst,
+  growth-lead + `venture` playbook (opportunity → validate → economics → GTM → human GO/NO-GO
+  → product-framing → measure). Same kernel, same gates — engineering is now one division of
+  the OS.
+
+## Remaining — requires real usage, not more building
+1. **Capture real runs** into `examples/runs/` (folder + guide ready) — evidence over claims.
 2. **Live-test the adapters** in Cursor/Codex/Devin; tune install paths per tool version.
-3. **Wire the PromptDiagnoser + triage schedule** — cron/scheduled task invoking `/triage`;
-   run-until-verifiable goals once the verifier has a track record.
-4. **Design-review board** for `complex` tasks (multi-reviewer challenge round at PLAN).
-
-## Run — later
-5. **Release/experiment playbooks** — progressive rollout, guardrail metrics (human-executed).
-6. **Harness templates per topology** — bundles of guides+sensors per service shape (Ashby:
-   narrow the variety, deepen the control).
-7. **Worktree isolation** for heavy fan-out.
-
-## Horizon — the operating company
-14. **Business pack:** CEO/CTO/PM/finance/marketing personas + opportunity→spec→GTM→build→
-    measure playbooks on the same kernel. Engineering becomes one division of the same OS.
+3. **Schedule `/triage`** in your environment (cron / scheduled task / CI nightly).
+4. **Wire the PromptDiagnoser** in `sre-incident-responder` to your LLM provider.
+5. **Tune from friction:** every misroute → a hint tweak; every recurring failure → a new
+   guide/sensor/validator check. The steering loop is now the roadmap.
 
 **Standing rule (the steering loop):** every recurring failure becomes a new guide, sensor,
 validator check, or playbook edit. The OS gets its quality from iteration, not prophecy.

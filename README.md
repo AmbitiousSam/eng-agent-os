@@ -88,7 +88,9 @@ writes its own artifacts, and returns protocol messages; the orchestrator append
 | `skills/` | Reusable procedures (intake, test-plan, deploy guide, codebase-map, bug-triage) |
 | `templates/` | Output templates (spec, design, ADR, review, test plan, impact/codebase map) |
 | `memory/` | Durable project knowledge (decisions / patterns / lessons / codebase map) |
-| `CUSTOMIZE.md` · `RUN.md` · `docs/IDE-SETUP.md` | Customization, Claude Code run guide, Cursor/Windsurf adapters |
+| `harnesses/` | Per-topology guide+sensor bundles instantiated for new services |
+| `adapters/` | Run EAOS from Cursor / Windsurf-Devin / Codex (same `.eaos/` state) |
+| `CUSTOMIZE.md` · `RUN.md` · `docs/IDE-SETUP.md` | Customization, Claude Code run guide, IDE setup |
 | `examples/` · `ROADMAP.md` | Worked walkthrough · phased build plan + business pack |
 
 ## Kernel + playbooks (v2)

@@ -34,7 +34,17 @@ playbooks:
     file: playbooks/product-framing.md
     command: /agentic-os
     trigger: "kind == product"
-    hints: ["build me a", "new product", "mvp", "from scratch", "startup idea"]
+    hints: ["build me a", "new product", "mvp", "from scratch"]
+  release:
+    file: playbooks/release.md
+    command: /agentic-os
+    trigger: "kind == release"
+    hints: [release, rollout, canary, "ship to prod", "feature flag"]
+  venture:
+    file: playbooks/venture.md
+    command: /agentic-os
+    trigger: "kind == venture"
+    hints: ["business idea", "startup idea", "should we build", "is there a market", monetize]
 
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
@@ -43,7 +53,7 @@ complexity_levels: [trivial, small, standard, complex]   # 0..3
 # The front door takes ANY engineering work: build it (feature/chore/refactor), fix it (bug),
 # respond to it (incident), or understand it (question). Kinds without a dedicated playbook
 # route to the default (feature-delivery).
-task_kinds: [feature, bug, refactor, chore, incident, question, product]
+task_kinds: [feature, bug, refactor, chore, incident, question, product, release, venture]
 # greenfield = brand-new repo/service with no existing code to map.
 greenfield_signal: new-repo
 
@@ -117,6 +127,10 @@ models:
     codebase-analyst:   coding      # tracing code + grep; escalate to reasoning for gnarly bugs
     incident-commander: reasoning   # live-incident diagnosis; correctness under pressure
     verifier:           reasoning   # independent done-grading; fresh context, hard calls
+    ceo-strategist:     reasoning   # business pack
+    product-manager:    reasoning
+    finance-analyst:    reasoning
+    growth-lead:        coding
     architect:          reasoning
     platform-engineer:  reasoning
     security-reviewer:  reasoning
@@ -148,6 +162,7 @@ parallelism:
     standard: pairs         # at most the proven pairs (dev∥qa-tests, reviewer∥security)
     complex:  full          # fan out wherever the fan_out_test passes
   never: "two agents editing the same files, or fan-out on work smaller than its coordination cost"
+  isolation: "for complex full fan-out, spawn writing subagents with worktree isolation when the harness supports it (each gets its own checkout); readers never need it"
 loop_guard:
   max_same_issue_loops: 3   # then escalate deadlock to human
 
@@ -187,6 +202,12 @@ autonomy:
       when: "complexity >= standard" # trivial/small skip this gate
       on_reject: loop_to_implement   # relay failing criteria via skills/sensor-feedback
     push_is_destructive: true        # still human-confirmed even when green (see human_gates)
+
+  # ---- Design review board (pre-implementation governance for complex work) ----
+  design_review:
+    required_when: "complexity == complex"
+    skill: skills/design-review
+    owner: architect          # convergence: one exchange per OBJECT, architect decides, security veto
 
   # ---- Launch review (pre-ship governance gate) ----
   launch_review:
