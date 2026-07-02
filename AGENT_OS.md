@@ -1,24 +1,56 @@
-# Engineering Agentic OS (EAOS)
+# Engineering Agentic OS (EAOS) — v2
 
-> A portable "operating system" for running software engineering work as a collaborating
-> team of AI agents — not a pile of isolated prompts. Runs natively on Claude Code
-> subagents today (no experimental features needed), and is structured to port to other harnesses later.
-> Built to sit **on top of** [`agency-agents`](https://github.com/msitarzewski/agency-agents),
-> reusing its personas where useful and adding the missing layer: **collaboration**.
+> **A complete engineering team, as an operating system.** Hand it anything — a feature, a bug,
+> a production incident, a "how does this work?" — and it runs the work the way a
+> high-performing engineering org would: intake → ground → design → build → review → test →
+> ship → operate → learn, with the right specialists pulled in, disagreements resolved, quality
+> gated, and the human steering where judgment matters. Runs on stock Claude Code subagents
+> today; portable by design (everything is files).
 
 ---
 
 ## 0. The one-paragraph version
 
-EAOS is a thin, version-controlled layer made of three things: **(1) agent personas**
-(markdown role definitions), **(2) a communication protocol** (a strict message schema +
-a shared "war room" file so agents can ask each other questions, challenge assumptions,
-and review work), and **(3) an orchestrator** (a lead agent that runs a loop: understand →
-plan → build → review → test → ship → stabilize, activating only the agents a given task
-actually needs). Because all three are just files, the "OS" is portable: today it runs on
-Claude Code's subagents and experimental Agent Teams; tomorrow the same persona/protocol
-files convert to Codex, Cursor, or Copilot. Business roles (CEO, CTO, PM, finance…) are a
-future *agent pack* that plugs into the same orchestrator and protocol unchanged.
+EAOS is a **kernel + playbooks** architecture. The **kernel** never changes: an orchestrator,
+a strict communication protocol (sole-writer war room + relayed messages), durable memory,
+human gates, and a pre-push quality gate. **Playbooks** are pluggable processes that ride on
+it — `feature-delivery`, `bug-fix`, `incident-response`, `investigation` today; rfc, release,
+and business processes tomorrow. A task arrives at one front door (`/agentic-os` or a dedicated
+command), gets classified (kind, complexity, signals), routed to a playbook, and the fewest
+agents that satisfy it do the work under kernel rules. Because it's all version-controlled
+files, the OS is portable, auditable, and yours to steer.
+
+## 0b. North star — the target operating model
+
+The aim is not "a coding agent." It's the **operating model of a top engineering org**
+(Amazon/Google/Meta-style mechanisms), reproduced as playbooks on one kernel:
+
+| Lifecycle stage | Real-org mechanism | EAOS today |
+|---|---|---|
+| Framing | PRFAQ / design doc before code | task-spec intake 🟡 (product framing later) |
+| Design review | RFC + review board, ADRs | PLAN + convergence rule + ADRs ✅ (board later) |
+| Build + code review | diff review, CI | IMPLEMENT→REVIEW loops ✅ |
+| Test | test-from-spec, regression | TEST + pre-push checks ✅ |
+| Launch review | security/privacy/ORR gates | security veto + human gates 🟡 |
+| Release | progressive rollout, rollback | deploy guide + human-executed 🟡 |
+| Operate | on-call, SEV response, SLOs | incident-response playbook ✅ (advisory) |
+| Learn | blameless postmortem → improve | RCA → memory → new guides/sensors ✅ |
+
+**The disciplines it composes** (each a named layer, not an accident): *agentic orchestration*
+(who works, how they coordinate) · *context engineering* (what each agent knows — GROUND,
+memory, impact maps) · *harness engineering* (guides + sensors that make output trustworthy) ·
+*loop engineering* (running it over time — the autonomy driver, future) · *human steering*
+(gates + the retro loop that turns failures into new controls).
+
+**Positioning:** the paid products (Devin, Cursor, Factory…) bundle an implicit harness inside
+a walled garden. EAOS is the opposite bet: the **open, portable, auditable harness you own** —
+riding on whatever coding agent you already use, explicit about its process, steerable by you.
+Don't out-Devin Devin; own the layer Devin locks up.
+
+**Honestly human-owned (by design):** product judgment and prioritization, accountability for
+launches, final behavior correctness, and anything destructive (deploy/push/migrate/spend).
+EAOS scaffolds and executes first passes; it directs human judgment to where it's most
+valuable rather than pretending to remove it.
 
 ---
 
@@ -171,11 +203,17 @@ This makes disagreement and clarification *first-class*, not buried in prose.
 
 ---
 
-## 5. Task orchestration logic — the engineering loop
+## 5. Task orchestration logic — the loop runner + playbooks
 
-The orchestrator runs a state machine. Each phase has an **entry gate** (conditions to enter),
-**participants** (chosen by routing), and an **exit gate** (what must be true to advance).
-Loops are explicit: any phase can send work *back*.
+**v2:** the orchestrator no longer runs one hardcoded process. The kernel **loop runner**
+(`orchestrator/loop.md`) selects a **playbook** by task kind/command — `feature-delivery`
+(default, shown below), `bug-fix`, `incident-response`, `investigation` — and executes its
+phases under kernel rules (protocol, memory, human gates, pre-push gate, backward edges).
+Adding a process = one file in `playbooks/` + a registry line in `routing.yaml`.
+
+Each phase has an **entry gate** (conditions to enter), **participants** (chosen by routing),
+and an **exit gate** (what must be true to advance). Loops are explicit: any phase can send
+work *back*. The default playbook:
 
 ```
         ┌──────────────┐
@@ -413,12 +451,15 @@ eng-agent-os/                  # the repo (version this; it IS the distribution)
 ├── ROADMAP.md                 # phased plan + business-pack extension
 ├── setup.sh                   # bootstrap: clone agency-agents + install everything
 ├── commands/
-│   └── agentic-os.md          # the /agentic-os slash command (autonomous driver)
-├── orchestrator/
+│   ├── agentic-os.md          # the front door: any task (feature/bug/question/…)
+│   └── incident.md            # /incident — live-incident entry point
+├── playbooks/                 # PROCESSES riding on the kernel (one file each)
+│   ├── feature-delivery.md · bug-fix.md · incident-response.md · investigation.md
+├── orchestrator/              # the KERNEL
 │   ├── orchestrator.md        # orchestrator role spec (the command's canonical form)
-│   ├── routing.yaml           # activation + model routing + autonomy gates + budget
+│   ├── routing.yaml           # activation + models + autonomy gates + playbook registry
 │   ├── protocol.md            # message schema + self-owned comms + convergence rule
-│   └── loop.md                # phase state machine + entry/exit gates
+│   └── loop.md                # loop RUNNER: selects a playbook, enforces kernel rules
 ├── agents/
 │   ├── README.md              # how EAOS agents relate to / inherit agency-agents
 │   ├── requirements-analyst.md … tech-writer.md   # the 10 team personas

@@ -158,6 +158,21 @@ if routing and isinstance(routing.get("playbooks"), dict):
         if f:
             (ok if exists(f) else err)(f"routing.playbooks['{pname}'].file exists: {f}")
 
+# ---------- 4c. command files: referenced personas/skills/playbooks must exist ----------
+cmd_dir = os.path.join(ROOT, "commands")
+if os.path.isdir(cmd_dir):
+    for f in sorted(os.listdir(cmd_dir)):
+        if not f.endswith(".md"):
+            continue
+        rel = f"commands/{f}"
+        text = read(os.path.join(ROOT, rel))
+        for m in re.finditer(r"agents/([\w-]+)\.md", text):
+            (ok if exists(f"agents/{m.group(1)}.md") else err)(f"{rel} references agents/{m.group(1)}.md → exists")
+        for m in re.finditer(r"skills/([\w-]+)/SKILL\.md", text):
+            (ok if exists(f"skills/{m.group(1)}/SKILL.md") else err)(f"{rel} references skills/{m.group(1)} → exists")
+        for m in re.finditer(r"playbooks/([\w-]+)\.md", text):
+            (ok if exists(f"playbooks/{m.group(1)}.md") else err)(f"{rel} references playbooks/{m.group(1)}.md → exists")
+
 # ---------- 5. skills have SKILL.md + frontmatter ----------
 skills_dir = os.path.join(ROOT, "skills")
 if os.path.isdir(skills_dir):

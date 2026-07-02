@@ -79,8 +79,11 @@ that you're starting.
 
 Spawn the **requirements** subagent (Task tool). Give it: the task, the war-room path, the
 codebase context, and `templates/task-spec.md`. It must return: the path to `task-spec.md`,
-the **complexity** (trivial/small/standard/complex), the **kind** (feature/bug/refactor/chore),
-the **signals** tags, and any **open questions** (each marked `blocking` or `fyi`).
+the **complexity** (trivial/small/standard/complex), the **kind**
+(feature/bug/refactor/chore/incident/question), the **signals** tags, and any **open
+questions** (each marked `blocking` or `fyi`). `question` = the human wants understanding, not
+a change (routes to the read-only investigation playbook); `incident` = production is broken
+now (routes to incident-response).
 
 Append its returned messages to the war room.
 

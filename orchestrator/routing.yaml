@@ -15,17 +15,23 @@ playbooks:
     file: playbooks/bug-fix.md
     command: /agentic-os
     trigger: "kind == bug"
-  # incident-response is your SRE project — register it here when the file exists:
-  # incident-response:
-  #   file: playbooks/incident-response.md
-  #   command: /incident
-  #   trigger: "kind == incident"
+  incident-response:
+    file: playbooks/incident-response.md
+    command: /incident
+    trigger: "kind == incident"
+  investigation:
+    file: playbooks/investigation.md
+    command: /agentic-os
+    trigger: "kind == question"
 
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
 
 # ---- Task kind (set by requirements-analyst; drives the flow + playbook selection) ----
-task_kinds: [feature, bug, refactor, chore, incident]
+# The front door takes ANY engineering work: build it (feature/chore/refactor), fix it (bug),
+# respond to it (incident), or understand it (question). Kinds without a dedicated playbook
+# route to the default (feature-delivery).
+task_kinds: [feature, bug, refactor, chore, incident, question]
 # greenfield = brand-new repo/service with no existing code to map.
 greenfield_signal: new-repo
 
@@ -97,6 +103,7 @@ models:
     orchestrator:       reasoning
     requirements:       reasoning
     codebase-analyst:   coding      # tracing code + grep; escalate to reasoning for gnarly bugs
+    incident-commander: reasoning   # live-incident diagnosis; correctness under pressure
     architect:          reasoning
     platform-engineer:  reasoning
     security-reviewer:  reasoning
