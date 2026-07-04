@@ -108,29 +108,7 @@ This is what lets EAOS grow toward a full engineering-org lifecycle without rewr
 way of working is a playbook on the same kernel.
 
 ## Architecture (HLD) — the two loops
-
-```mermaid
-flowchart TB
-    H["Human in the loop"] -- "initial requirement / wake" --> O{"Orchestrator (higher agent)<br/>triage / route / dispatch / verify / record"}
-    O -. "only hard decisions, deadlocks,<br/>destructive approvals" .-> H
-    subgraph EAOS["EAOS kernel + playbooks"]
-        subgraph W["isolated workers - never talk to each other directly"]
-            W1["developer<br/>(reason / act / observe / check)"]
-            W2["qa"]
-            W3["reviewer"]
-            W4["architect / devops / ..."]
-        end
-        O -- "dispatch scoped units" --> W
-        W -. "reports (messages)" .-> O
-        S[("shared state .eaos/<br/>war room: orchestrator sole writer<br/>artifacts: each worker owns its files<br/>memory: decisions / patterns / lessons")]
-        O <--> S
-        W -. "read state / write own artifacts" .-> S
-        V{"verifier<br/>maker is never checker"}
-        O -- "grade Definition of Done" --> V
-        V -. "approve / reject" .-> O
-    end
-```
-
+![alt text](loop-arch.png)
 **How to read it:**
 
 - **Two loops.** The *higher loop* is the orchestrator's control cycle (triage → route →
