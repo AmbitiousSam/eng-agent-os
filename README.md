@@ -107,6 +107,56 @@ EAOS separates a constant **kernel** from pluggable **playbooks**:
 This is what lets EAOS grow toward a full engineering-org lifecycle without rewrites: every new
 way of working is a playbook on the same kernel.
 
+## Architecture (HLD) — the two loops
+
+```mermaid
+flowchart TB
+    H["Human in the loop"] -- "initial requirement / wake" --> O{"Orchestrator (higher agent)
+    triage -> route -> dispatch -> verify -> record"}
+    O -. "only hard decisions, deadlocks,
+    destructive approvals" .-> H
+    subgraph EAOS["EAOS — kernel + playbooks"]
+        subgraph W["isolated workers — never talk to each other directly"]
+            W1["developer
+            (reason -> act -> observe -> check)"]
+            W2["qa"]
+            W3["reviewer"]
+            W4["architect / devops / ..."]
+        end
+        O -- "dispatch scoped units" --> W
+        W -. "reports (messages)" .-> O
+        S[("shared state  .eaos/
+        war room — orchestrator sole writer
+        artifacts — each worker owns its files
+        memory — decisions / patterns / lessons")]
+        O <--> S
+        W -. "read state / write own artifacts" .-> S
+        V{"verifier — maker != checker"}
+        O -- "grade Definition of Done" --> V
+        V -. "approve / reject -> loop" .-> O
+    end
+```
+
+**How to read it:**
+
+- **Two loops.** The *higher loop* is the orchestrator's control cycle (triage → route →
+  dispatch → verify → record). The *lower loops* are the workers: each runs its own
+  reason → act → observe → check micro-loop on its scoped unit, and keeps iterating until the
+  Definition of Done is confirmed — not until it *feels* done.
+- **The war room is the spine.** Workers are isolated and never talk to each other directly;
+  "peer messaging" is a relay — a worker returns a message, the orchestrator (the war room's
+  **sole writer**) records it and forwards what's relevant. No file races, no context
+  divergence, and the entire collaboration is an auditable, resumable log on disk. Workers
+  read shared state freely but write only their own artifact files.
+- **Done is graded, not claimed.** The maker never grades its own stop condition: an
+  independent **verifier** (fresh context, no authoring memory) checks every acceptance
+  criterion with evidence and re-runs the checks. REJECT loops the work back with structured
+  fix instructions; only APPROVE ends the loop.
+- **The human is a gate, not a bottleneck.** Enters at exactly four points: the initial
+  prompt, hard business decisions the code can't resolve, deadlocks, and destructive
+  approvals (push / deploy / migrate / spend). Everything else runs autonomously —
+  assume-and-proceed, logged in the war room for after-the-fact review.
+
 ## Runs anywhere (the portability contract)
 
 EAOS is designed to be **injected into any machine, any IDE, any coding agent**. The contract
