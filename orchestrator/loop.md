@@ -43,3 +43,15 @@ behaves exactly as before; the process was simply extracted into playbooks so ne
 
 > Adding a process = add a file under `playbooks/` + register it in `routing.yaml > playbooks`.
 > The runner and all kernel behaviors above are reused unchanged.
+
+## Loops vs pipelines (kernel design law)
+
+A loop is a **cost with a justification**, never a default. Playbooks are **pipelines** — fixed,
+auditable phase sequences — because the process IS knowable upfront. Loops exist only in small
+bounded pockets inside them (review loop-back, test-fix, repro attempts), exactly where the
+right next action genuinely can't be known in advance. Every such pocket must have all four:
+explicit **state** (attempt ledger, not transcripts), an **external ground-truth anchor**
+(tests/validator/spec — never the model grading its own trace), a **hard ceiling**
+(`loop_guard`), and a **goal anchor** (original acceptance criteria verbatim on every
+iteration). Never loop: deterministic transformations, plans knowable upfront, high-stakes
+single decisions (single grounded pass + human), or irreversible actions.

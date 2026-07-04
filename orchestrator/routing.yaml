@@ -173,6 +173,16 @@ loop_guard:
                    no retries; escalate immediately with what's needed"
   attempt_ledger: true      # on each loop-back, carry a one-line-per-attempt summary
                             # (approach → outcome), never full transcripts of failed tries
+  goal_anchor: true         # ANTI-DRIFT: every loop-back and phase hand-off re-includes the
+                            # ORIGINAL acceptance criteria VERBATIM (from task-spec.md), never a
+                            # paraphrase — agents iterate against the spec, not against a
+                            # summary of their own prior reasoning (summaries-of-summaries drift)
+  max_total_loopbacks: 8    # hard ceiling on ALL backward edges per task (not just same-issue);
+                            # at the ceiling: halt, hand the human the attempt ledger + best
+                            # current state — never keep thrashing
+  ground_truth_rule: "every loop iterates against an EXTERNAL anchor (test runner, validator,
+                      schema, spec criteria) — a loop checked only against the model's own
+                      prior output is drift, not progress"
 
 # ---- Autonomy (the run is autonomous except at these human gates) ----
 autonomy:
