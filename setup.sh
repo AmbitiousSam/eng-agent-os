@@ -65,7 +65,7 @@ for d in "$EAOS_DIR/skills/"*/; do [ -d "$d" ] && cp -rf "$d" "$SKILLS_DIR/"; do
 
 say ""
 say "Verifying install:"
-for f in commands/agentic-os.md commands/agent-os.md agents/orchestrator.md agents/codebase-analyst.md eaos/routing.yaml; do
+for f in commands/agentic-os.md commands/agent-os.md eaos/orchestrator.md agents/codebase-analyst.md eaos/routing.yaml; do
   if [ -e "$CLAUDE_DIR/$f" ]; then printf "  \033[0;32m✓\033[0m %s\n" "~/.claude/$f"; else printf "  \033[0;31m✗ MISSING\033[0m %s\n" "~/.claude/$f"; fi
 done
 say ""
