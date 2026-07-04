@@ -108,7 +108,7 @@ This is what lets EAOS grow toward a full engineering-org lifecycle without rewr
 way of working is a playbook on the same kernel.
 
 ## Architecture (HLD) — the two loops
-![alt text](loop-arch.png)
+![EAOS two-loop architecture: human at the gates, orchestrator higher loop, isolated workers with inner loops, shared .eaos state, independent verifier](loop-arch.png)
 **How to read it:**
 
 - **Two loops.** The *higher loop* is the orchestrator's control cycle (triage → route →
