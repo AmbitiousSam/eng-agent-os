@@ -111,29 +111,23 @@ way of working is a playbook on the same kernel.
 
 ```mermaid
 flowchart TB
-    H["Human in the loop"] -- "initial requirement / wake" --> O{"Orchestrator (higher agent)
-    triage -> route -> dispatch -> verify -> record"}
-    O -. "only hard decisions, deadlocks,
-    destructive approvals" .-> H
-    subgraph EAOS["EAOS — kernel + playbooks"]
-        subgraph W["isolated workers — never talk to each other directly"]
-            W1["developer
-            (reason -> act -> observe -> check)"]
+    H["Human in the loop"] -- "initial requirement / wake" --> O{"Orchestrator (higher agent)<br/>triage / route / dispatch / verify / record"}
+    O -. "only hard decisions, deadlocks,<br/>destructive approvals" .-> H
+    subgraph EAOS["EAOS kernel + playbooks"]
+        subgraph W["isolated workers - never talk to each other directly"]
+            W1["developer<br/>(reason / act / observe / check)"]
             W2["qa"]
             W3["reviewer"]
             W4["architect / devops / ..."]
         end
         O -- "dispatch scoped units" --> W
         W -. "reports (messages)" .-> O
-        S[("shared state  .eaos/
-        war room — orchestrator sole writer
-        artifacts — each worker owns its files
-        memory — decisions / patterns / lessons")]
+        S[("shared state .eaos/<br/>war room: orchestrator sole writer<br/>artifacts: each worker owns its files<br/>memory: decisions / patterns / lessons")]
         O <--> S
         W -. "read state / write own artifacts" .-> S
-        V{"verifier — maker != checker"}
+        V{"verifier<br/>maker is never checker"}
         O -- "grade Definition of Done" --> V
-        V -. "approve / reject -> loop" .-> O
+        V -. "approve / reject" .-> O
     end
 ```
 

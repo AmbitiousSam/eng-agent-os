@@ -165,6 +165,14 @@ parallelism:
   isolation: "for complex full fan-out, spawn writing subagents with worktree isolation when the harness supports it (each gets its own checkout); readers never need it"
 loop_guard:
   max_same_issue_loops: 3   # then escalate deadlock to human
+  retry_must_vary: true     # a retry after the same error MUST change approach — same action
+                            # twice on the same failure is spinning, not learning; escalate instead
+  error_classes:            # classify before retrying:
+    recoverable: "syntax, missing import, failing assertion → retry WITH a varied approach"
+    hard_blocker: "missing credentials/access, undefined requirement, absent dependency →
+                   no retries; escalate immediately with what's needed"
+  attempt_ledger: true      # on each loop-back, carry a one-line-per-attempt summary
+                            # (approach → outcome), never full transcripts of failed tries
 
 # ---- Autonomy (the run is autonomous except at these human gates) ----
 autonomy:
