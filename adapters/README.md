@@ -11,7 +11,12 @@ role-playing the team sequentially (same process, same artifacts, no parallelism
 | **Cursor** (2.4+) | `adapters/cursor/` → rules + subagents | ✅ subagents / Build-in-Parallel |
 | **Windsurf / Devin Desktop** | `adapters/windsurf/` → `/agentic-os` workflow | ✅ subagents (Devin Local) |
 | **Codex CLI / app** | `adapters/codex/` → AGENTS.md + `.codex/agents` | ✅ TOML subagents |
+| **ANY AGENTS.md-reading tool** (Zed, opencode, CodeWhale, Swival, Copilot CLI, …) | `adapters/AGENTS.md` → copy to repo root | 🟡 per tool |
 | anything else (files only) | point it at `commands/agentic-os.md` | 🟡 sequential role-play |
+
+> **Universal fallback:** `adapters/AGENTS.md` uses the AGENTS.md standard that most agents now
+> read automatically. If your tool isn't listed above, start there — it requires zero
+> tool-specific setup.
 
 ## The contract every adapter relies on
 1. The driver is `commands/agentic-os.md` — a tool-neutral procedure.

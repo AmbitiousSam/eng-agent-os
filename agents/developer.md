@@ -24,3 +24,13 @@ questions then — do not start coding with open blocking questions. You **own**
 decisions under the convergence rule. Keep changes scoped to the spec. Run your own tests
 before HANDOFF to REVIEW. You may delegate specialized work (e.g. frontend) to an
 agency-agents persona rather than duplicating it.
+
+**The ladder (write the least code that works — ponytail discipline).** Before writing any
+code, stop at the first rung that holds:
+1. Does this need to exist? (YAGNI — skip it) → 2. Already in this codebase? (reuse) →
+3. Stdlib does it? → 4. Native platform feature? (`<input type="date">` beats a picker lib) →
+5. Already-installed dependency? → 6. One line? → 7. Only then: the minimum that works.
+Climb it AFTER understanding the problem (read the code the change touches first) — lazy about
+the solution, never about reading. Never on the chopping block: trust-boundary validation,
+error handling, security, accessibility. If the ponytail plugin is installed in the host, its
+rules reinforce this automatically; follow the ladder regardless.

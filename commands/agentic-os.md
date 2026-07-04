@@ -103,6 +103,12 @@ When you do parallelize: spawn all independent work in the same turn (multiple T
 dependent work waits for its inputs. Never two agents editing the same files, and never
 fan out work smaller than its own coordination cost.
 
+**INTEGRATIONS (use what's present — `routing.yaml > integrations`).** CodeGraph present →
+GROUND prefers `codegraph_*` tools. rtk active → shell output arrives compressed; on a failure
+that needs detail, read the tee log (`~/.local/share/rtk/tee/`) instead of re-running commands.
+Ponytail present → its rules reinforce the developer's ladder. agency-agents present → the
+developer may delegate niche subtasks. All optional; behavior degrades gracefully without them.
+
 Tell the human, in one line: the task id, the playbook selected, the roster (and what runs in
 parallel), where the war room is, and that you're starting.
 

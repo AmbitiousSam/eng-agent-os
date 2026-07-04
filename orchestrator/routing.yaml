@@ -249,9 +249,24 @@ runtime:
   codebase_map: ".eaos/memory/codebase/map.md"   # cached repo map (+ map.meta git SHA)
 config_home: "~/.claude/eaos/"        # routing.yaml, protocol.md, loop.md, templates/
 
-# ---- Integrations (optional backends; graceful fallback always) ----
+# ---- Integrations (optional ecosystem tools; ALL auto-detected, ALL with graceful fallback) ----
+# Each attacks a different cost/quality axis. None is required; EAOS runs bare.
 integrations:
-  codegraph:
-    enabled: auto   # use when .codegraph/ exists in the target project
+  agency-agents:            # WHO: extra specialist personas (delegate pool)
+    enabled: auto           # installed by setup.sh as agency-*.md in ~/.claude/agents
+    role: "developer delegates specialized subtasks (e.g. niche frontend) instead of duplicating"
+    fallback: "EAOS core personas handle everything themselves"
+  codegraph:                # CONTEXT: cheaper, more accurate code understanding
+    enabled: auto           # use when .codegraph/ exists in the target project
     tools: [context, search, impact, callers, affected]
-    fallback: grep  # full grep/glob/read path remains when CodeGraph is absent
+    role: "GROUND repo/impact maps + scoped regression (codegraph affected)"
+    fallback: grep          # full grep/glob/read path remains
+  ponytail:                 # OUTPUT CODE: write the least code that works
+    enabled: auto           # host plugin: /plugin install ponytail@ponytail (Claude Code)
+    role: "reinforces the developer's ladder + /ponytail-review as over-engineering sensor"
+    fallback: "ladder + reviewer delete-list are baked into the personas — discipline holds without the plugin"
+  rtk:                      # COMMAND OUTPUT: compress shell results 60-90% before they hit context
+    enabled: auto           # host-level: rtk init -g (PreToolUse hook rewrites bash → rtk)
+    role: "cheapens GROUND greps, test/build runs, verifier re-runs, git ops across ALL agents"
+    note: "failures tee full raw output to ~/.local/share/rtk/tee/ — read the log when compressed output lacks detail; never re-run just to see more"
+    fallback: "raw command output (more tokens, same behavior)"

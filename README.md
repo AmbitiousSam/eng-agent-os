@@ -107,6 +107,43 @@ EAOS separates a constant **kernel** from pluggable **playbooks**:
 This is what lets EAOS grow toward a full engineering-org lifecycle without rewrites: every new
 way of working is a playbook on the same kernel.
 
+## Runs anywhere (the portability contract)
+
+EAOS is designed to be **injected into any machine, any IDE, any coding agent**. The contract
+that makes that true: the brain is markdown, the runtime is plain files, and every dependency
+beyond that is optional with a graceful fallback.
+
+| Layer | Requirement | Fallback |
+|---|---|---|
+| Brain (command, playbooks, personas, kernel) | any agent that reads files | — (pure markdown) |
+| Runtime state (`./.eaos/`) | a filesystem | — (portable across tools & machines; resumable) |
+| `setup.sh` install | bash + git (macOS/Linux; **Windows: Git Bash or WSL**) | copy files manually — it's only `cp` |
+| Validator / doctor / Makefile | python3 (+pyyaml), bash | skip — they're dev-time checks, not runtime |
+| Entry point | Claude Code `/agentic-os` · Cursor rule · Windsurf workflow · Codex/**any AGENTS.md tool** (`adapters/`) | single agent role-plays the team sequentially |
+| Integrations (agency-agents, CodeGraph, ponytail, rtk) | each optional, per-OS installers | EAOS runs bare — see table below |
+
+Practical Windows note: everything except the convenience scripts is OS-neutral; run `setup.sh`
+from Git Bash (ships with git) or WSL, or copy `commands/ agents/ skills/ playbooks/
+orchestrator/ templates/` into `~/.claude/` (or `%USERPROFILE%\.claude\`) by hand. rtk's
+auto-rewrite hook needs WSL on Windows (filters work natively); CodeGraph and ponytail are
+node-based and cross-platform.
+
+## Optional integrations (auto-detected, graceful without)
+
+EAOS runs bare, but four ecosystem tools each cut a different cost/quality axis. Install any
+subset; `./scripts/eaos-doctor.sh` reports what's active.
+
+| Tool | Axis | Install | Without it |
+|---|---|---|---|
+| [agency-agents](https://github.com/msitarzewski/agency-agents) | extra specialist personas | via `setup.sh` (automatic) | core personas do it all |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) | context: cheap, precise code understanding | `npx @colbymchenry/codegraph` + `codegraph init` | GROUND uses grep |
+| [ponytail](https://github.com/DietrichGebert/ponytail) | output code: write the least that works | `/plugin install ponytail@ponytail` | ladder + reviewer delete-list are baked into personas |
+| [rtk](https://github.com/rtk-ai/rtk) | command output: −60–90% tokens on shell results | `brew install rtk && rtk init -g` | raw output (more tokens, same behavior) |
+
+They compose: CodeGraph cuts *exploration* tokens, rtk cuts *execution-output* tokens,
+ponytail cuts *generated-code* volume, agency-agents deepens specialization — four different
+taxes, one lean OS.
+
 ## Modes — it knows when *not* to activate itself
 
 EAOS scales effort to the task (set by complexity at intake). It won't run a 10-agent loop for a

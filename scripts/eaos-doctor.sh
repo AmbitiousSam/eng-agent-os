@@ -27,11 +27,30 @@ for a in $need_agents; do [ -e "$CLAUDE_DIR/agents/$a.md" ] || miss="$miss $a"; 
 sk_ok=1; for s in requirement-intake test-plan deployment-guide codebase-map bug-triage; do
   [ -e "$CLAUDE_DIR/skills/$s/SKILL.md" ] || sk_ok=0; done
 [ "$sk_ok" = 1 ] && pass "EAOS skills installed" || bad "some skills missing — run ./setup.sh"
-# agency-agents (optional)
+# Optional ecosystem integrations (never failures — EAOS runs bare)
+echo "Optional integrations:"
 if ls "$CLAUDE_DIR"/agents/agency-*.md >/dev/null 2>&1; then
-  pass "agency-agents personas present (optional delegate pool)"
+  pass "agency-agents personas (delegate pool)"
 else
-  note "agency-agents not installed — EAOS works standalone; clone failed or skipped (optional)"
+  note "agency-agents not installed (optional) — EAOS works standalone"
+fi
+if command -v codegraph >/dev/null 2>&1; then
+  pass "codegraph CLI on PATH (GROUND uses it where .codegraph/ exists)"
+else
+  note "codegraph not installed (optional) — GROUND falls back to grep. Install (any OS, needs node): npx @colbymchenry/codegraph"
+fi
+if command -v rtk >/dev/null 2>&1; then
+  pass "rtk on PATH (command-output compression; run 'rtk init -g' once if not hooked)"
+else
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) note "rtk not installed (optional) — Windows: use WSL for full hook support, or the release zip (filters only): github.com/rtk-ai/rtk/releases" ;;
+    *) note "rtk not installed (optional) — curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh   (then: rtk init -g)" ;;
+  esac
+fi
+if ls "$CLAUDE_DIR"/plugins 2>/dev/null | grep -qi ponytail || [ -d "$HOME/.config/ponytail" ]; then
+  pass "ponytail detected (minimal-code discipline reinforced at host level)"
+else
+  note "ponytail not detected (optional) — the ladder is baked into the developer persona anyway. /plugin install ponytail@ponytail"
 fi
 
 echo "Project readiness (cwd):"
