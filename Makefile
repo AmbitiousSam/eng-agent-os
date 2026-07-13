@@ -1,5 +1,5 @@
 # Engineering Agentic OS — common tasks
-.PHONY: help install doctor validate check test hooks push
+.PHONY: help install doctor validate check test hooks push eval
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -17,10 +17,14 @@ doctor: ## Check install + current project readiness
 validate: ## Mechanically validate repo consistency (routing, personas, templates)
 	@python3 scripts/validate-eaos.py
 
-test: ## Syntax-check shell scripts + run the validator
+eval: ## Schema-validate the routing eval fixture (evals/routing-golden.yaml)
+	@python3 scripts/eval_check.py
+
+test: ## Syntax-check shell scripts + run the validator + the eval-fixture check
 	@for s in setup.sh scripts/eaos-doctor.sh scripts/push-to-github.sh scripts/install-hooks.sh .githooks/pre-push; do \
 	  bash -n "$$s" && echo "$$s: syntax OK"; done
 	@python3 scripts/validate-eaos.py
+	@python3 scripts/eval_check.py
 
 check: test ## Alias for test (CI entrypoint)
 

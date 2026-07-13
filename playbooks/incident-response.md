@@ -27,8 +27,8 @@ executes. The tool/agent never deploys, rolls back, restarts, or mutates anythin
 | **DIAGNOSE** | scoped | incident-commander (+codebase-analyst for repo/impact map) | change→symptom correlation done (CloudTrail-first), codebase grounded, **cited hypothesis** (evidence: logs/metrics/commit/file:line) or explicit unknown + what's needed |
 | **MITIGATE-ADVISE** | hypothesis or sev1/2 pressure (may run BEFORE diagnosis completes) | incident-commander | numbered immediate actions, smallest-safe-first, each with why + exact step + risk — human-executed |
 | **RESOLVE-PLAN** | mitigated/stable | incident-commander (+developer) | the real fix written as a task-spec for a follow-up `/agentic-os` run |
-| **RCA** | resolved/stable | incident-commander (+sre-observability) | `templates/incident-rca.md` completed: timeline, root cause vs symptom, detection gaps, action items |
-| **STABILIZE** | RCA done | orchestrator | RCA → `.eaos/memory/lessons/`; recurring cause → propose a new guide/sensor (harness steering loop); pattern → memory |
+| **RCA** | resolved/stable | incident-commander (+sre-observability) | `templates/incident-rca.md` completed and written to `.eaos/incidents/<incident-id>/RCA.md` (the one canonical RCA home): timeline, root cause vs symptom, detection gaps, action items |
+| **STABILIZE** | RCA done | orchestrator | one-line pointer written to `.eaos/memory/lessons/<incident-id>.md` linking back to the RCA; recurring cause → propose a new guide/sensor (harness steering loop); pattern → memory |
 
 ## Notes
 - **Mitigate-before-root-cause:** for sev1/sev2, MITIGATE-ADVISE runs as soon as a plausible

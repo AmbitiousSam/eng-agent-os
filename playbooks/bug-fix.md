@@ -4,7 +4,7 @@ command: /agentic-os
 trigger: "kind == bug"
 roster:
   always: [requirements, codebase-analyst, developer, code-reviewer]
-  optional: [qa-engineer, security-reviewer, sre-observability]
+  optional: [qa-engineer, security-reviewer, sre-observability, architect]
 phases: [INTAKE, GROUND, CLARIFY, PLAN, IMPLEMENT, REVIEW, TEST, STABILIZE]
 inherits_kernel: true
 exit_condition: "reproduction test passes as a permanent regression test; existing suite green"

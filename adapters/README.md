@@ -2,21 +2,55 @@
 
 EAOS is deliberately harness-agnostic: the brain is markdown (command + playbooks + personas +
 protocol), and runtime state is plain files (`.eaos/`). Any tool that can **read/write files**
-can run it — subagent support makes it parallel; without subagents it runs as one agent
-role-playing the team sequentially (same process, same artifacts, no parallelism).
+can run it. But "subagent support" in the table below does not mean equivalent quality — see
+[What degrades and why](#what-degrades-and-why) before you assume a 🟡 row behaves like Claude
+Code.
 
 | Tool | Adapter | Parallel agents? |
 |---|---|---|
-| **Claude Code** | native — `setup.sh` installs `/agentic-os` | ✅ Task subagents |
-| **Cursor** (2.4+) | `adapters/cursor/` → rules + subagents | ✅ subagents / Build-in-Parallel |
-| **Windsurf / Devin Desktop** | `adapters/windsurf/` → `/agentic-os` workflow | ✅ subagents (Devin Local) |
-| **Codex CLI / app** | `adapters/codex/` → AGENTS.md + `.codex/agents` | ✅ TOML subagents |
+| **Claude Code** | native — `setup.sh` installs `/agentic-os` | ✅ Task subagents (fresh isolated context per spawn) |
+| **Cursor** (2.4+) | `adapters/cursor/` → rules + subagents | 🟡 manual port: copy personas by hand; quality depends on the tool's subagent + context-isolation support |
+| **Windsurf / Devin Desktop** | `adapters/windsurf/` → `/agentic-os` workflow | 🟡 manual port: copy personas by hand; quality depends on the tool's subagent + context-isolation support |
+| **Codex CLI / app** | `adapters/codex/` → AGENTS.md + `.codex/agents` | 🟡 manual port: copy personas by hand; quality depends on the tool's subagent + context-isolation support |
 | **ANY AGENTS.md-reading tool** (Zed, opencode, CodeWhale, Swival, Copilot CLI, …) | `adapters/AGENTS.md` → copy to repo root | 🟡 per tool |
-| anything else (files only) | point it at `commands/agentic-os.md` | 🟡 sequential role-play |
+| anything else (files only, no subagents) | [`adapters/solo-mode.md`](solo-mode.md) | ❌ single context — use solo-mode, not role-play |
 
 > **Universal fallback:** `adapters/AGENTS.md` uses the AGENTS.md standard that most agents now
 > read automatically. If your tool isn't listed above, start there — it requires zero
-> tool-specific setup.
+> tool-specific setup. If it has no subagent/context-isolation feature at all, go straight to
+> [`adapters/solo-mode.md`](solo-mode.md) instead of role-playing the team.
+
+## What degrades and why
+
+EAOS's quality in Claude Code comes from four mechanical properties, not from the personas'
+wording:
+
+1. **Fresh, isolated subagent contexts.** Each spawn starts with no memory of how the work was
+   built. This is what makes maker≠checker *real* — the reviewer and verifier literally cannot
+   see the developer's reasoning, only the artifacts.
+2. **Genuine multi-sampling.** Independent agents draw independent samples from the model;
+   disagreement is a real second opinion, not the same context re-reading its own output.
+3. **Model-tier routing.** Cheap/fast models for mechanical roles, stronger models for judgment
+   calls — a real cost/quality trade, not just a label.
+4. **Frontmatter tool scoping.** A read-only reviewer literally cannot edit files; the boundary
+   is enforced by the harness, not by the reviewer's good behavior.
+
+A tool without subagents (or without real context isolation between them) loses all four —
+there is one context, one continuous memory, one sample. Manually role-playing the personas in
+that single context keeps the *ceremony* (the persona names, the message types, the phase
+structure) but not the *mechanism* that made the ceremony worth anything: the "reviewer" is the
+same model, in the same context, that just wrote the code, grading its own homework with a
+different hat on. That's single-agent quality at multi-agent token cost — worse than just
+asking the model to do the task well once.
+
+This is why the 🟡 rows above say "manual port" rather than "✅": copying the persona files into
+a tool's subagent format is necessary but not sufficient. If that tool's subagents don't give
+each spawn a genuinely separate context (no shared scratchpad, no visible prior reasoning), you
+have not reproduced EAOS's quality guarantee — you've reproduced its file layout. Verify your
+tool's isolation behavior before trusting a 🟡 row to behave like Claude Code's ✅ row. When in
+doubt, or when the tool has no subagent feature at all, use
+[`adapters/solo-mode.md`](solo-mode.md) — it drops the ceremony that can't be enforced and
+keeps the one trick that ports anywhere: a second, genuinely fresh session as the checker.
 
 ## The contract every adapter relies on
 1. The driver is `commands/agentic-os.md` — a tool-neutral procedure.

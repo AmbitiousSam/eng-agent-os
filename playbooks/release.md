@@ -4,7 +4,7 @@ command: /agentic-os
 trigger: "kind == release"
 roster:
   always: [devops-engineer, sre-observability]
-  optional: [platform-engineer, developer, qa-engineer]
+  optional: [platform-engineer, developer, qa-engineer, tech-writer]
 phases: [PLAN-ROLLOUT, PREFLIGHT, STAGE, PROGRESS, WATCH, COMPLETE-OR-ROLLBACK, STABILIZE]
 inherits_kernel: true
 exit_condition: "released at 100% with guardrails green, or cleanly rolled back with cause recorded"

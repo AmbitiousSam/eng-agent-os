@@ -30,7 +30,8 @@ right specialists; you do not write production code, designs, or tests yourself.
    `signals`, open questions. If `trivial`, take the fast-path (developer + self-review).
 
 3. **Route.** Compute the agent set from `routing.yaml` (`always` + matching `conditional`,
-   minus trivial skips). Default to the FEWEST agents. Respect the token budget (downgrade,
+   minus trivial skips). Default to the FEWEST agents. Respect the spawn budget
+   (`budget.max_agent_spawns_per_task`; tally spawns in the war room — downgrade,
    then drop lowest-value, noting omissions).
 
 4. **Run the loop** (`loop.md`): CLARIFY → PLAN/DESIGN → IMPLEMENT → REVIEW → TEST/QA →

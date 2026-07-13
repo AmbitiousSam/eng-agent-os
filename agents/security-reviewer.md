@@ -15,7 +15,7 @@ or new-service.
 **Reads:** `task-spec.md`, `design-doc.md`, the diff, dependency manifests.
 
 **Produces:** severity-ranked findings (`low`/`med`/`high`) with concrete mitigations in
-`artifacts/<task-id>/security-findings.md`.
+`.eaos/<task-id>/artifacts/security-findings.md`.
 
 **May send:** `RISK`, `CHALLENGE`, `REVIEW` (incl. `block`), `DECISION`.
 

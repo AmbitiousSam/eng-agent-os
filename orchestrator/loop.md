@@ -19,10 +19,14 @@ playbook** and runs that playbook's phases under kernel rules. The playbooks liv
   (`routing.yaml > autonomy`).
 - **Pre-push gate** — self-review (maker≠checker) then project code checks, before any push
   (`routing.yaml > autonomy.pre_push`).
-- **Memory** — read at PLAN, written at STABILIZE (`memory/`).
+- **Memory** — read at PLAN, written at STABILIZE (`.eaos/memory/`).
 - **Gate enforcement** — a phase does not advance until its exit gate is met; unmet gates
   (missing info, hard disagreement, loop > `loop_guard.max_same_issue_loops`) escalate to the
   human with a one-paragraph blocker summary.
+- **Loop-guard honesty** — `loop_guard`'s ceilings and attempt ledger (`routing.yaml`) are
+  **prompt-enforced**, not mechanically enforced, until the `eaos` runtime CLI exists (ROADMAP
+  backlog #1); the orchestrator must write the running loop counter into the war room after
+  every backward edge — a written counter is harder to quietly drop than a mental one.
 - **Backward edges (iteration)** — any phase may route work backward:
   - REVIEW `request-changes` → IMPLEMENT
   - TEST bug → IMPLEMENT

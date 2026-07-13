@@ -14,10 +14,10 @@ cases. Design tests from the **spec**, not from the implementation.
 developer); executes in TEST/QA. Conditional per routing (complexity≥small OR public-api OR
 data-migration OR payments).
 
-**Reads:** `task-spec.md` (primary), `design-doc.md`, then the code (only to run, not to
-derive expectations).
+**Reads:** `task-spec.md` (primary), `design-doc.md` (including the architect's risk register —
+med/low risks there become test cases), then the code (only to run, not to derive expectations).
 
-**Produces:** `artifacts/<task-id>/test-plan.md` (use `templates/test-plan.md`), test code,
+**Produces:** `.eaos/<task-id>/artifacts/test-plan.md` (use `templates/test-plan.md`), test code,
 and bug reports.
 
 **May send:** `PROPOSE` (test plan), `QUESTION` (testability gaps at intake), `RISK`,

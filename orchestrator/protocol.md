@@ -1,8 +1,18 @@
 # EAOS Communication Protocol
 
-Communication is **baked into the OS** — it does not rely on any harness feature (no Agent
-Teams, no peer-messaging plugin). The orchestrator owns coordination through files it
-controls. This makes the system portable, autonomous, auditable, and resumable.
+Communication is **baked into the OS** — it does not rely on any harness's peer-messaging
+feature (no Agent Teams, no peer-messaging plugin). The orchestrator owns coordination through
+files it controls, so the FILE protocol below (war room, message schema, artifacts) is
+harness-neutral: any tool that reads/writes files can produce and consume it.
+
+That portability claim is narrower than it sounds, though. The *files* are harness-neutral; the
+*quality* the files are meant to certify is not. Fresh-context verification and independent
+review only mean something if the reviewing/verifying agent is actually spawned with an
+isolated context — no memory of how the work was built. That property comes from the harness
+(Claude Code's subagent spawning), not from the protocol. A tool that can write and read these
+same files but has no real context isolation between "roles" can produce a structurally
+identical war room while having zero actual independence behind it — see
+`adapters/solo-mode.md` for the honest fallback when that isolation isn't available.
 
 ## The model: orchestrator-mediated, file-based
 

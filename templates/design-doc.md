@@ -17,7 +17,7 @@
 |---|---|---|---|
 
 ## Decisions
-- ADR-NNN: <decision> (see memory/decisions/)
+- ADR-NNN: <decision> (see .eaos/memory/decisions/)
 
 ## Buildability sign-off
 - [ ] Developer confirms this is implementable.

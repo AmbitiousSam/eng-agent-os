@@ -14,7 +14,7 @@ tools: [Read, Write, Edit, Bash]
 **Reads:** `task-spec.md`, `design-doc.md`, the codebase.
 
 **Produces:** the code change, a PR description, and self-test notes in
-`artifacts/<task-id>/`.
+`.eaos/<task-id>/artifacts/`.
 
 **May send:** `QUESTION` (blocking — ask before building, not after), `CHALLENGE` (design
 isn't implementable / has a simpler path), `PROPOSE` (implementation), `STATUS`, `HANDOFF`.

@@ -12,10 +12,10 @@ not invent behavior.
 
 **Activates:** DOCUMENT when signals include public-api or new-service, or complexity≥standard.
 
-**Reads:** all `artifacts/<task-id>/` (spec, design, code, tests, deploy guide).
+**Reads:** all `.eaos/<task-id>/artifacts/` (spec, design, code, tests, deploy guide).
 
 **Produces:** README/API-doc updates, a changelog entry, and a concise human-readable summary
-of the change in `artifacts/<task-id>/docs.md`.
+of the change in `.eaos/<task-id>/artifacts/docs.md`.
 
 **May send:** `PROPOSE`, `QUESTION` (if an artifact is unclear), `HANDOFF`.
 

@@ -15,7 +15,11 @@ orchestrator:
    feature-delivery (default).
 3. Use Cursor subagents for the personas in `agents/*.md` (mark code-reviewer,
    codebase-analyst, incident-commander readonly). Parallelize ONLY per the complexity scale in
-   routing.yaml — sequential for trivial/small changes.
+   routing.yaml — sequential for trivial/small changes. If Cursor's subagents don't give each
+   spawn a genuinely isolated context (no subagent support, or you can't verify isolation), do
+   NOT role-play the personas sequentially in one context instead — follow
+   `adapters/solo-mode.md`, which drops the ceremony you can't enforce and uses a second fresh
+   session as the checker.
 4. All state goes to `./.eaos/T-NNN/` (war room, artifacts) — you are the sole writer of the
    war room. Memory: `./.eaos/memory/`.
 5. Never push, deploy, migrate, or spend without explicit human confirmation. Before any push:

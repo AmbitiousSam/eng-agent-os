@@ -94,7 +94,7 @@ Keep the Teams message to a one-line status + link/path; the full report lives i
 Most incident-response bots correlate alerts to a *service name* and stop there. This one goes
 one level deeper: it uses the same **codebase map + impact map** the rest of EAOS builds during
 GROUND, so it traces the symptom to the actual **file, function, and commit** — and it writes
-that into the same version-controlled memory (`.eaos/memory/incidents/`, promoted to
-`patterns/` when recurring) that the rest of the engineering loop uses. An incident today makes
+that into the same version-controlled state (`.eaos/incidents/<id>/RCA.md`, with a pointer in
+`.eaos/memory/lessons/` and promotion to `patterns/` when recurring) that the rest of the engineering loop uses. An incident today makes
 the *next* incident faster to diagnose, and a resolved incident's "later actions" hand directly
 into a normal `/agentic-os` follow-up task — same protocol, same war room, same human gates.

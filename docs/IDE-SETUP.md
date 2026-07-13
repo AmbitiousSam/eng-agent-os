@@ -4,7 +4,10 @@
 > Windsurf/Devin workflow, and a Codex AGENTS.md snippet. Copy the file into your tool's
 > rules/workflows location and you're done; this doc explains the mapping behind them.
 > Runtime state (`./.eaos/`) is identical across tools, so a task started in Claude Code can
-> be resumed in Cursor or Codex.
+> be resumed in Cursor or Codex. **None of these adapters reproduce Claude Code's quality
+> guarantee automatically** — see `adapters/README.md`'s "What degrades and why" section. If
+> your tool doesn't give each spawn a genuinely isolated context, use
+> [`adapters/solo-mode.md`](../adapters/solo-mode.md) instead of role-playing the personas.
 
 EAOS has two layers, and they port differently:
 
@@ -13,12 +16,13 @@ EAOS has two layers, and they port differently:
   write files in the repo uses them unchanged. Coordination was built as files *on purpose* so
   it never depends on a single vendor's feature.
 - **The driver needs a thin per-tool adapter** — how the loop is *invoked* and how subagents
-  (on different models) are *spawned*. As of early 2026, the major tools all have native
-  equivalents, so the adapter is small.
+  (on different models) are *spawned*. As of writing, several major tools advertise native
+  subagent-like features — verify against your tool's current docs, since this space moves
+  fast and the adapter's correctness depends on what your specific version actually supports.
 
 ## Primitive mapping
 
-| EAOS primitive | Claude Code (shipped) | Cursor 2.4+ | Windsurf / Devin Desktop |
+| EAOS primitive | Claude Code (shipped) | Cursor (as of writing) | Windsurf / Devin Desktop (as of writing) |
 |---|---|---|---|
 | Persona = markdown + YAML frontmatter, per-agent model | `~/.claude/agents/*.md` | **subagents** (md + frontmatter: name/description/model/`readonly`) | **subagents** (Devin Local) |
 | `/agentic-os` slash driver | `commands/agentic-os.md` | custom command / driver subagent | **`/workflow`** in `.windsurf/workflows/*.md` |
@@ -28,8 +32,10 @@ EAOS has two layers, and they port differently:
 | Per-agent model routing | frontmatter `model:` | per-subagent model config | per-subagent |
 | War room / artifacts / memory | `.eaos/` files | `.eaos/` files | `.eaos/` files |
 
-> Note: Windsurf was acquired by Cognition and rebranded to **Devin Desktop** (June 2026), so
-> Windsurf and Devin are now the same product family.
+> Note: as of writing, Windsurf and Devin Desktop are referenced together here because of a
+> reported Cognition/Windsurf relationship. This repo has not verified that claim independently
+> — check your tool's current docs/branding before relying on it, and treat "Windsurf / Devin
+> Desktop" in this doc as "whichever of the two your install actually is."
 
 ## Cursor setup
 
@@ -53,10 +59,14 @@ EAOS has two layers, and they port differently:
 
 ## Graceful degradation (tools without subagents)
 
-Even a single-agent tool can run EAOS: one agent **role-plays the team sequentially**, reading
-each persona file and writing to the war room phase by phase (Requirements → Ground → Plan →
-Implement → Review → Test → Docs). You lose parallelism and per-role model routing, but the
-disciplined process and every artifact stay identical — which is most of the value.
+If your tool has no subagent feature — or you can't verify that its subagents give each spawn a
+genuinely isolated context — do not have one agent role-play the team sequentially. That keeps
+the persona names and phase headers but not the mechanism (fresh-context review, independent
+verification, model tiering, tool scoping) that makes the ceremony worth its token cost; see
+`adapters/README.md`'s "What degrades and why". Use [`adapters/solo-mode.md`](../adapters/solo-mode.md)
+instead: it keeps GROUND, the task spec with acceptance criteria, assume-and-proceed
+clarification, and the pre-push/test-build-lint gate, and replaces in-context "verification"
+with a second, genuinely fresh session grading the diff against the spec.
 
 ## Recommended structure for multi-IDE repos
 

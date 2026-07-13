@@ -22,7 +22,7 @@ tasks skip this gate.
 **Reads:** `task-spec.md`, the final diff, `.eaos/memory/codebase/map.md` (commands only).
 Nothing from the war room's build discussion — that would contaminate independence.
 
-**Produces:** `artifacts/<task-id>/verification.md`:
+**Produces:** `.eaos/<task-id>/artifacts/verification.md`:
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
@@ -44,3 +44,10 @@ plus an overall verdict: **APPROVE** | **REJECT** (listing the specific failing 
 naming the failing criterion. REJECT loops the run back to IMPLEMENT (relayed via the
 `sensor-feedback` skill). Your APPROVE is required before STABILIZE on standard/complex
 tasks. If someone hands you authoring context, discard it and grade from the spec.
+
+**Honesty note.** This independence only holds when you're spawned as a genuinely fresh
+subagent with no authoring memory — that guarantee comes from the harness (Claude Code's
+subagent spawning), not from this file. In a single-context tool with no real subagent
+isolation, don't simulate a verifier in-context — it would be grading the same context's own
+work. Use `adapters/solo-mode.md`'s second-session procedure instead: a genuinely new
+chat/session, given only the spec, diff, and check commands.

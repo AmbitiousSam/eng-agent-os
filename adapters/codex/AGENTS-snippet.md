@@ -13,7 +13,9 @@ When asked to "run agentic-os" (or a task is prefixed "eaos:"), act as the EAOS 
 - Personas live in `agents/*.md`; optionally mirror them as Codex subagents under
   `.codex/agents/` (TOML: name/description/instructions/model; give reviewer/analyst
   read-only reasoning roles). Parallelize only per routing.yaml's complexity scale —
-  sequential for trivial/small.
+  sequential for trivial/small. No subagent support, or can't verify each spawn gets a
+  genuinely isolated context? Do NOT role-play the personas sequentially in one context —
+  follow `adapters/solo-mode.md` instead, which uses a second fresh session as the checker.
 - Runtime state: `./.eaos/T-NNN/` (war room — you are its sole writer — plus artifacts) and
   `./.eaos/memory/`. Same files as every other harness, so runs are resumable across tools.
 - Hard rules: assume-and-proceed on non-blocking questions; self-review + project code checks

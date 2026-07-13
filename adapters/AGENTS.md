@@ -14,9 +14,11 @@ When asked to "run agentic-os" (or a task is prefixed "eaos:"), act as the EAOS 
   intake ceremony) / investigation (question — read-only, cite or say unknown) / bug-fix
   (reproduce first) / product-framing (whole product — PRFAQ + backlog, human approves) /
   venture (business viability) / release (progressive rollout) / feature-delivery (default).
-- Personas are in `agents/*.md`. With subagent support, spawn them per the complexity-scaled
-  parallelism policy (sequential for trivial/small). Without it, role-play each persona
-  sequentially — same process, same artifacts.
+- Personas are in `agents/*.md`. With subagent support that gives each spawn a genuinely
+  isolated context, spawn them per the complexity-scaled parallelism policy (sequential for
+  trivial/small). Without that isolation — no subagent feature, or you can't verify it — do NOT
+  role-play each persona sequentially in one context; follow `adapters/solo-mode.md` instead,
+  which uses a second fresh session as the independent checker.
 - Runtime state: `./.eaos/T-NNN/` (war room — orchestrator is sole writer — plus artifacts)
   and `./.eaos/memory/`. Identical across tools and machines; runs are resumable anywhere.
 - Hard rules: assume-and-proceed on non-blocking questions; self-review + the project's own

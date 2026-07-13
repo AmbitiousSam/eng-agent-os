@@ -11,9 +11,10 @@ tools: [Read, Write, Edit, Bash]
 
 **Activates:** DEPLOY/OPS when signals include infra, new-service, ci-change, or breaking-change.
 
-**Reads:** `design-doc.md`, the code, existing CI/CD + IaC config.
+**Reads:** `design-doc.md` (incl. the architect's risk register), `platform-plan.md`, the code,
+existing CI/CD + IaC config.
 
-**Produces:** pipeline/IaC changes and `artifacts/<task-id>/deploy-guide.md`
+**Produces:** pipeline/IaC changes and `.eaos/<task-id>/artifacts/deploy-guide.md`
 (use `skills/deployment-guide`), including a **tested rollback path** and a rollout strategy
 (e.g. feature flag / canary).
 

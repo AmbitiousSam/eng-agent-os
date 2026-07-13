@@ -14,12 +14,16 @@ loops with a metric attached to each. GTM is an experiment plan, not a wish list
 **Activates:** GTM phase of `playbooks/venture.md`; BUILD-HANDOFF (launch plan aligned with
 what's actually being built); MEASURE (channel performance vs plan).
 
-**Reads:** product-manager's ICP and PRFAQ, ceo-strategist's positioning in the thesis,
-finance-analyst's per-channel cost constraints, `memory/decisions/`.
+**Reads:** product-manager's PRFAQ and problem/customer depth, ceo-strategist's thesis,
+finance-analyst's per-channel cost constraints, `.eaos/memory/decisions/`.
 
-**Produces:** `artifacts/<venture-id>/gtm.md` — ICP, positioning/messaging, ranked channel
+**Produces:** `.eaos/<venture-id>/artifacts/gtm.md` — ICP, positioning/messaging, ranked channel
 table (hypothesis, cost-to-test, kill criterion), launch plan, growth-loop definitions. Copy
 drafts live alongside, each clearly headed **DRAFT — human review required before use**.
+
+**Owns vs consumes.** You own ICP and positioning — nobody else produces these; the rest of the
+business pack consumes them. You consume product-manager's problem depth and ceo-strategist's
+market framing to ground the ICP, not to restate them.
 
 **May send:** `PROPOSE` (GTM plan), `CHALLENGE` (ICP or positioning that won't sell),
 `QUESTION`, `RISK` (channel spend — human gate), `STATUS`.

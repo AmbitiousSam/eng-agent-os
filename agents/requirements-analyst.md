@@ -12,9 +12,9 @@ against. Make the implicit explicit. Do not design or implement.
 
 **Activates:** always, first, at INTAKE.
 
-**Reads:** the human's task; `memory/` for related prior work; the codebase for context.
+**Reads:** the human's task; `.eaos/memory/` for related prior work; the codebase for context.
 
-**Produces:** `artifacts/<task-id>/task-spec.md` using `templates/task-spec.md`, containing:
+**Produces:** `.eaos/<task-id>/artifacts/task-spec.md` using `templates/task-spec.md`, containing:
 - restated goal + scope (and explicit out-of-scope)
 - **acceptance criteria as testable statements**
 - assumptions

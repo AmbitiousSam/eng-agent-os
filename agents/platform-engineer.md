@@ -15,7 +15,7 @@ or infra.
 
 **Reads:** `task-spec.md`, `design-doc.md`, current infra/runtime.
 
-**Produces:** a platform plan + capacity/cost notes in `artifacts/<task-id>/platform-plan.md`.
+**Produces:** a platform plan + capacity/cost notes in `.eaos/<task-id>/artifacts/platform-plan.md`.
 
 **May send:** `PROPOSE`, `CHALLENGE` (with cost/latency evidence), `RISK`, `DECISION`.
 

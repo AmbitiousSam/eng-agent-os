@@ -141,7 +141,7 @@ beyond that is optional with a graceful fallback.
 | Runtime state (`./.eaos/`) | a filesystem | — (portable across tools & machines; resumable) |
 | `setup.sh` install | bash + git (macOS/Linux; **Windows: Git Bash or WSL**) | copy files manually — it's only `cp` |
 | Validator / doctor / Makefile | python3 (+pyyaml), bash | skip — they're dev-time checks, not runtime |
-| Entry point | Claude Code `/agentic-os` · Cursor rule · Windsurf workflow · Codex/**any AGENTS.md tool** (`adapters/`) | single agent role-plays the team sequentially |
+| Entry point | Claude Code `/agentic-os` · Cursor rule · Windsurf workflow · Codex/**any AGENTS.md tool** (`adapters/`) | no subagent isolation → **`adapters/solo-mode.md`** (grounded single agent; do NOT role-play the team) |
 | Integrations (agency-agents, CodeGraph, ponytail, rtk) | each optional, per-OS installers | EAOS runs bare — see table below |
 
 Practical Windows note: everything except the convenience scripts is OS-neutral; run `setup.sh`
@@ -189,7 +189,8 @@ One of the reasons to trust it on a real repo: it cannot take irreversible actio
 - **No destructive/costly action without your confirmation** — it will *propose* a deploy,
   `git push`, migration, or anything that spends money, but never execute it autonomously.
 - **Least privilege** — each persona's tools are scoped in frontmatter (e.g. the reviewer is
-  read-only; the writer can't run shell).
+  read-only; the writer can't run shell) (enforced by Claude Code subagents; advisory text
+  elsewhere).
 - **Security can hard-veto** — a high-severity finding blocks delivery until mitigated.
 - **Full audit trail** — every decision/question/handoff is in `.eaos/<id>/warroom.md`.
 - **Bounded autonomy** — it stops at defined human gates (`routing.yaml > autonomy`) and

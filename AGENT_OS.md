@@ -305,8 +305,10 @@ skip_when_trivial: [architect, qa, security, devops, platform, sre, tech_writer]
   self-review, no war room.
 - **Batching:** independent agents in the same phase run *in parallel* (QA writes tests
   while reviewer reviews).
-- **Token budget:** the orchestrator gets a per-task budget; if a phase would exceed it,
-  it drops the lowest-value conditional agent and notes the omission.
+- **Spawn budget:** the orchestrator gets a per-task cap on subagent spawns
+  (`budget.max_agent_spawns_per_task`, tallied in the war room); if a phase would exceed it,
+  it drops the lowest-value conditional agent and notes the omission. (A token-level budget
+  needs the future `eaos` runtime CLI — an LLM can't measure its own token spend.)
 - **The "separate-engineer" test** (from multi-agent best practice): only fan out work that
   you could hand to different engineers with no further conversation; otherwise keep it
   sequential. Multi-agent runs can cost ~10–15× a single chat, so fan-out must earn it.
@@ -549,7 +551,7 @@ reviewer) + war room + protocol + routing for a single linear pass. No paralleli
 their routing signals. Turn on parallel execution within a phase.
 
 **Phase 4 — Memory & efficiency (2–3 days).** Add MEMORY (ADRs/patterns/lessons), reuse-on-cache,
-token budgets, model-routing overrides, retrospectives.
+spawn budgets, model-routing overrides, retrospectives.
 
 **Phase 5 — Hardening & portability (ongoing).** Tune skip rules from real runs; add the
 LangGraph escape hatch if needed; run conversion scripts to a second harness to prove portability.

@@ -15,20 +15,38 @@ echo "========================================"
 
 echo "Installation (~/.claude):"
 [ -d "$CLAUDE_DIR" ] && pass "$CLAUDE_DIR exists" || bad "$CLAUDE_DIR missing — run ./setup.sh"
-for f in commands/agentic-os.md commands/agent-os.md commands/incident.md eaos/routing.yaml eaos/protocol.md eaos/loop.md eaos/orchestrator.md; do
+for f in commands/agentic-os.md commands/agent-os.md commands/incident.md commands/triage.md \
+         eaos/routing.yaml eaos/protocol.md eaos/loop.md eaos/orchestrator.md \
+         eaos/memory-seed/index.md eaos/adapters/solo-mode.md; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
 # required agents installed
 # orchestrator is NOT a spawnable agent — it's the role /agentic-os adopts on the main
 # session; its spec lives at ~/.claude/eaos/orchestrator.md (checked above).
-need_agents="requirements codebase-analyst architect developer code-reviewer qa-engineer security-reviewer devops-engineer platform-engineer sre-observability tech-writer incident-commander verifier"
-miss=""
-for a in $need_agents; do [ -e "$CLAUDE_DIR/agents/$a.md" ] || miss="$miss $a"; done
-[ -z "$miss" ] && pass "all 13 EAOS worker personas installed" || bad "missing agents:$miss — run ./setup.sh"
+# Derived from the repo's agents/*.md basenames (excluding README) so this list can never
+# drift out of sync with setup.sh's own verify step — both compute the same set, live.
+need_agents="$(cd "$EAOS_DIR/agents" 2>/dev/null && ls *.md 2>/dev/null | sed 's/\.md$//' | grep -v '^README$')"
+if [ -z "$need_agents" ]; then
+  bad "could not derive the agent list from $EAOS_DIR/agents — run the doctor from a full eng-agent-os checkout"
+else
+  miss=""
+  count=0
+  for a in $need_agents; do
+    count=$((count + 1))
+    [ -e "$CLAUDE_DIR/agents/$a.md" ] || miss="$miss $a"
+  done
+  [ -z "$miss" ] && pass "all $count EAOS worker personas installed" || bad "missing agents:$miss — run ./setup.sh"
+fi
 # skills
-sk_ok=1; for s in requirement-intake test-plan deployment-guide codebase-map bug-triage; do
-  [ -e "$CLAUDE_DIR/skills/$s/SKILL.md" ] || sk_ok=0; done
-[ "$sk_ok" = 1 ] && pass "EAOS skills installed" || bad "some skills missing — run ./setup.sh"
+# Derived from the repo's skills/ dirs so this list can never drift (same pattern as agents).
+need_skills="$(cd "$EAOS_DIR/skills" 2>/dev/null && ls -d */ 2>/dev/null | sed 's:/$::')"
+if [ -z "$need_skills" ]; then
+  bad "could not derive the skill list from $EAOS_DIR/skills — run the doctor from a full eng-agent-os checkout"
+else
+  sk_ok=1; for s in $need_skills; do
+    [ -e "$CLAUDE_DIR/skills/$s/SKILL.md" ] || sk_ok=0; done
+  [ "$sk_ok" = 1 ] && pass "EAOS skills installed" || bad "some skills missing — run ./setup.sh"
+fi
 # Optional ecosystem integrations (never failures — EAOS runs bare)
 echo "Optional integrations:"
 if ls "$CLAUDE_DIR"/agents/agency-*.md >/dev/null 2>&1; then

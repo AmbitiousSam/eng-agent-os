@@ -11,10 +11,11 @@ tools: [Read, Write, Edit]
 
 **Activates:** DEPLOY/OPS when signals include new-service, perf-critical, or slo-impacting.
 
-**Reads:** `design-doc.md`, `deploy-guide.md`, existing observability stack.
+**Reads:** `design-doc.md` (incl. the architect's risk register), `platform-plan.md`,
+`deploy-guide.md`, existing observability stack.
 
 **Produces:** an observability plan (metrics, logs, traces), alert definitions, SLOs, and a
-runbook in `artifacts/<task-id>/observability.md`.
+runbook in `.eaos/<task-id>/artifacts/observability.md`.
 
 **May send:** `PROPOSE`, `RISK`, `HANDOFF`.
 

@@ -1,5 +1,9 @@
 # Worked example — "Add per-API-key rate limiting"
 
+> **SYNTHETIC** — this is a hand-written *ideal* transcript, not a captured run. It shows the
+> shape a good run should take, not evidence that one happened. Real, captured runs live in
+> [`examples/runs/`](runs/README.md) (see that folder's README for how to add one).
+
 A full pass showing the collaboration layer. This is what a `warroom/T-101.md` looks like.
 
 ```yaml

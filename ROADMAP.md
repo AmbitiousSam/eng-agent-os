@@ -36,6 +36,24 @@ guides, and sensors.
   → product-framing → measure). Same kernel, same gates — engineering is now one division of
   the OS.
 
+## Backlog — from the v2.0 design review (inventions, ranked)
+
+1. **`eaos` mechanical runtime CLI** — move deterministic kernel work (task IDs, war-room
+   append/sequencing, loop-back counting, gate checks, cost/attempt ledger) from prompt-
+   enforcement to a small script. Shrinks the 6.4k-word prompt surface; rules become
+   computational. *The one that changes the system's nature.*
+2. **Compiled prompts** — `agentic-os.md` + all adapters become build artifacts assembled
+   from single-source rule fragments (`make build-command`); kills the 7-file parallelism /
+   4-file clarification duplication and adapter drift.
+3. **Golden eval set** — 15–20 canned tasks with expected kind/playbook/roster; `make eval`
+   guards routing behavior against persona/hint edits.
+4. **Role fusion by complexity** — standard tasks get one fused `ops` persona (three lenses);
+   only complex splits into devops+platform+sre. Same for business pack.
+5. **Phase-checkpointed orchestrator** — `phase-state.md` at each boundary; optional fresh
+   context per phase (RALF). Bounds orchestrator context growth; makes resume real.
+6. Smaller: index-only memory reads enforced · setup checksum warning (repo vs ~/.claude
+   drift) · shellcheck + eval in CI · exercise worktree isolation.
+
 ## Remaining — requires real usage, not more building
 1. **Capture real runs** into `examples/runs/` (folder + guide ready) — evidence over claims.
 2. **Live-test the adapters** in Cursor/Codex/Devin; tune install paths per tool version.

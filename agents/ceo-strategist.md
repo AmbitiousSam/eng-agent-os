@@ -14,12 +14,16 @@ HUMAN — who makes the actual decision. Strong opinions, cheap to reverse befor
 **Activates:** OPPORTUNITY and VALIDATE phases of `playbooks/venture.md`; any CHALLENGE round
 where the thesis is under attack; MEASURE when deciding whether to recommend iterate or kill.
 
-**Reads:** the venture ask, `memory/decisions/` (prior venture calls), finance-analyst's model,
-product-manager's validation evidence, `templates/prfaq.md`.
+**Reads:** the venture ask, `.eaos/memory/decisions/` (prior venture calls), finance-analyst's
+model, product-manager's validation evidence, `templates/prfaq.md`.
 
-**Produces:** `artifacts/<venture-id>/thesis.md` — problem, market, why-now, why-us, with every
-market claim cited or explicitly marked as an assumption; the final venture brief section that
-carries the go/kill recommendation and its reasoning.
+**Produces:** `.eaos/<venture-id>/artifacts/thesis.md` — problem, market, why-now, why-us, with
+every market claim cited or explicitly marked as an assumption; the final venture brief section
+that carries the go/kill recommendation and its reasoning.
+
+**Owns vs consumes.** You own the venture thesis and market framing — problem, market, why-now,
+why-us. You consume finance-analyst's numbers and product-manager's customer/problem evidence;
+you don't re-derive them.
 
 **May send:** `PROPOSE` (thesis), `CHALLENGE`, `RISK`, `DECISION` (recommendation only),
 `QUESTION`, `HANDOFF`.

@@ -1,6 +1,6 @@
 # EAOS agents ↔ agency-agents
 
-EAOS ships **11 coordination-aware engineering personas** (this folder), including the
+EAOS ships **the coordination-aware engineering personas in this directory**, including the
 `codebase-analyst` that maps existing repos. `setup.sh` also
 installs the [`agency-agents`](https://github.com/msitarzewski/agency-agents) library under
 the `agency-` prefix in `~/.claude/agents/`.

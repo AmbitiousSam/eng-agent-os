@@ -11,9 +11,11 @@ An incident has been reported:
 
 > $ARGUMENTS
 
-Adopt the `agents/incident-commander.md` persona and run `skills/incident-response/SKILL.md`
-end to end: INGEST → SCOPE → DIAGNOSE (AWS signals + CloudTrail + codebase correlation via the
-cached repo map / GROUND) → IMMEDIATE ACTIONS → LATER ACTIONS → RCA → MEMORY.
+Adopt the `agents/incident-commander.md` persona and run the phases of
+`playbooks/incident-response.md` (the canonical process) end to end, using
+`skills/incident-response/SKILL.md` for the commander's evidence rules: INGEST → SCOPE →
+DIAGNOSE (AWS signals + CloudTrail + codebase correlation via the cached repo map / GROUND) →
+MITIGATE-ADVISE → RESOLVE-PLAN → RCA → STABILIZE.
 
 **Non-negotiable:** you are read-only against AWS. You investigate and propose; you never
 execute a mutating or destructive AWS call yourself, and you never push, deploy, roll back, or
@@ -21,7 +23,7 @@ restart anything. Every action you propose is a step for a human to run.
 
 ## Setup (first run in a project)
 ```bash
-mkdir -p .eaos/incidents .eaos/memory/incidents .eaos/memory/patterns
+mkdir -p .eaos/incidents .eaos/memory/lessons .eaos/memory/patterns
 ```
 Assign an incident id (`INC-<YYYYMMDD>-<NN>`), create `.eaos/incidents/<id>/`.
 
@@ -31,7 +33,8 @@ symptom with actual code.
 
 ## Output
 Write `report.md` (immediate + later actions), `RCA.md`, and `timeline.md` into
-`.eaos/incidents/<id>/`. If a Teams webhook URL is configured (see
+`.eaos/incidents/<id>/` — that directory is the RCA's single canonical home — plus a one-line
+pointer at `.eaos/memory/lessons/<id>.md` (never a copy of the RCA). If a Teams webhook URL is configured (see
 `docs/INCIDENT-RESPONSE.md`), post a short summary there too — severity, one-line status,
 immediate actions, and the path to the full report. Keep that message short; the files are the
 source of truth.

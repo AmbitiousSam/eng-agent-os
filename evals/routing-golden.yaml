@@ -1,0 +1,189 @@
+# Golden routing eval fixtures (ROADMAP backlog #3, minimal version).
+#
+# 16 canned one-line task descriptions with the routing decision they SHOULD produce, per
+# `orchestrator/routing.yaml`. Used as a classify-only dry run — see `scripts/eval-routing.md`
+# for how to run it (manual or LLM-judged) and `scripts/eval_check.py` for the schema check
+# (`make eval`).
+#
+# Fields per case:
+#   task                 — the one-line task description as a human would type it
+#   expected.kind         — task_kinds value the requirements-analyst should assign
+#   expected.playbook     — playbooks/*.md `name` that should be selected
+#   expected.complexity   — optional; complexity_levels value, when the case depends on it
+#   expected.signals      — optional; list of routing.yaml `signals` the case should trip
+#   expected.roster       — MINIMUM roster: agent identifiers (from routing.yaml
+#                           `models.by_agent`) that MUST be activated. Real runs may add more
+#                           (e.g. optional specialists joining mid-flight); they must never have
+#                           fewer than this list.
+#   note                  — why this case is in the fixture (what it's guarding against)
+
+cases:
+  # 1. Trivial typo — fast-path, no specialists (loop.md: "developer + self-review").
+  - task: "Fix a typo in README.md: 'recieve' should be 'receive'."
+    expected:
+      kind: chore
+      playbook: feature-delivery
+      complexity: trivial
+      roster: [developer]
+    note: "trivial fast-path — no war room, no specialists, abbreviated intake; routing.yaml:108
+      says only developer + quick self-review run, so spawning a code-reviewer here is a fail,
+      not a pass"
+
+  # 2. Small fix — non-trivial bug, no special signals.
+  - task: "The settings page date picker defaults to the wrong timezone. Fix it."
+    expected:
+      kind: bug
+      playbook: bug-fix
+      complexity: small
+      roster: [requirements, codebase-analyst, developer, code-reviewer, qa-engineer]
+    note: "qa-engineer joins once complexity >= small; codebase-analyst always on bug-fix"
+
+  # 3. Standard feature — no special signals, complexity alone drives the roster.
+  - task: "Add a CSV export button to the internal reports dashboard."
+    expected:
+      kind: feature
+      playbook: feature-delivery
+      complexity: standard
+      roster: [requirements, developer, code-reviewer, codebase-analyst, architect,
+               qa-engineer, tech-writer]
+    note: "architect + tech-writer join at complexity >= standard"
+
+  # 4. Complex new-service — every conditional agent triggers off the new-service signal.
+  - task: "Stand up a new notifications microservice that fans out email/SMS/push from a queue."
+    expected:
+      kind: feature
+      playbook: feature-delivery
+      complexity: complex
+      signals: [new-service]
+      roster: [requirements, developer, code-reviewer, codebase-analyst, architect,
+               qa-engineer, security-reviewer, devops-engineer, platform-engineer,
+               sre-observability, tech-writer]
+    note: "new-service alone triggers architect/security/devops/platform/sre/tech-writer"
+
+  # 5. Bug with an explicit repro — codebase-analyst reproduces before any fix.
+  - task: >
+      Checkout crashes with a null-pointer when the cart is emptied then checkout is clicked.
+      Repro: add item, remove it, click checkout. Stack trace attached.
+    expected:
+      kind: bug
+      playbook: bug-fix
+      complexity: small
+      roster: [requirements, codebase-analyst, developer, code-reviewer, qa-engineer]
+    note: "repro supplied up front — GROUND should confirm it, not hunt for one"
+
+  # 6. Incident — fast_path skips normal INTAKE; incident-commander owns it.
+  - task: "Prod is down: 5xx spike on the payments API starting right after the last deploy."
+    expected:
+      kind: incident
+      playbook: incident-response
+      signals: [payments]
+      roster: [incident-commander]
+    note: "fast_path: true — no requirements/developer/code-reviewer ceremony"
+
+  # 7. Question / investigation — read-only, cheap by default.
+  - task: >
+      How does our rate limiter decide per-key vs per-IP today, and what would adding a
+      burst allowance take?
+    expected:
+      kind: question
+      playbook: investigation
+      roster: [codebase-analyst]
+    note: "investigation playbook's own roster, not the engineering always-list"
+
+  # 8. Product framing — an in-repo new product area, not a brand-new empty repo.
+  - task: "Scope out a whole new customer-loyalty product inside our existing app."
+    expected:
+      kind: product
+      playbook: product-framing
+      roster: [requirements, architect]
+    note: "product-framing builds nothing itself; roster is requirements+architect only"
+
+  # 9. Venture — a plain "should we build this" market question (no pricing wording).
+  - task: "Should we build a marketplace connecting freelance welders with shipyards? Is there a market?"
+    expected:
+      kind: venture
+      playbook: venture
+      roster: [ceo-strategist, product-manager]
+    note: "venture kind + playbook, not product or feature"
+
+  # 10. Release — progressive delivery of an already-built, launch-review-approved artifact.
+  - task: "Roll out the new checkout flow to production behind a canary, ramping 1% to 100%."
+    expected:
+      kind: release
+      playbook: release
+      roster: [devops-engineer, sre-observability]
+    note: "release playbook's own always-roster"
+
+  # 11. Tricky hint — auth-touching feature MUST pull in security-reviewer even though the
+  #     ask reads like a plain feature request.
+  - task: "Add OAuth-based single sign-on login to the customer portal."
+    expected:
+      kind: feature
+      playbook: feature-delivery
+      complexity: standard
+      signals: [auth]
+      roster: [requirements, developer, code-reviewer, codebase-analyst, architect,
+               qa-engineer, security-reviewer, tech-writer]
+    note: "auth signal -> security-reviewer, regardless of how routine the ask sounds"
+
+  # 12. Tricky hint — pricing/packaging language routes to venture, NOT feature, even though
+  #     "add a pricing tier" reads like ordinary engineering work.
+  - task: >
+      Add a new usage-based pricing tier with credits and a monthly subscription plan for
+      power users.
+    expected:
+      kind: venture
+      playbook: venture
+      roster: [ceo-strategist, product-manager]
+    note: >
+      routing.yaml venture hints include pricing/credits/subscription plan/tier — this must
+      NOT be classified as a feature-delivery task just because it mentions a UI/build verb
+  # 13. Tricky hint — "refactor" is a task_kind but has no dedicated playbook; it falls
+  #     through to feature-delivery's `default: true`, not an error.
+  - task: >
+      Refactor the payment-processing module to extract a shared retry-with-backoff helper;
+      no behavior change.
+    expected:
+      kind: refactor
+      playbook: feature-delivery
+      complexity: small
+      roster: [requirements, developer, code-reviewer, codebase-analyst, qa-engineer]
+    note: "kind=refactor has no trigger of its own -> lands on feature-delivery via default"
+
+  # 14. Tricky hint — greenfield product: brand-new repo, GROUND/codebase-analyst never apply.
+  - task: >
+      Build me a brand-new mobile app from scratch, no existing codebase, for splitting
+      group expenses among friends.
+    expected:
+      kind: product
+      playbook: product-framing
+      roster: [requirements, architect]
+    note: "greenfield_signal (new-repo) — nothing to map; codebase-analyst does not apply"
+
+  # 15. Tricky hint — perf-critical alone (independent of complexity) pulls in architect,
+  #     platform-engineer, and sre-observability.
+  - task: >
+      Redesign the product-search query path: p99 latency is 2.1s under peak load and must
+      drop under 300ms.
+    expected:
+      kind: feature
+      playbook: feature-delivery
+      complexity: standard
+      signals: [perf-critical]
+      roster: [requirements, developer, code-reviewer, codebase-analyst, architect,
+               qa-engineer, platform-engineer, sre-observability, tech-writer]
+    note: "perf-critical -> architect + platform-engineer + sre-observability"
+
+  # 16. Tricky hint — data-migration signal pulls in qa-engineer even at small complexity,
+  #     and the migration itself is a chore, not a feature.
+  - task: >
+      Migrate the users table from the legacy schema to the new normalized schema,
+      backfilling 40M rows with zero downtime.
+    expected:
+      kind: chore
+      playbook: feature-delivery
+      complexity: standard
+      signals: [data-migration]
+      roster: [requirements, developer, code-reviewer, codebase-analyst, architect,
+               qa-engineer, tech-writer]
+    note: "data-migration -> qa-engineer (also implied by complexity >= small here)"

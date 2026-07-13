@@ -12,20 +12,42 @@ COMMANDS_DIR="$CLAUDE_DIR/commands"
 CONFIG_DIR="$CLAUDE_DIR/eaos"                      # global OS config (read by the command)
 VENDOR_DIR="$EAOS_DIR/vendor/agency-agents"
 AGENCY_REPO="https://github.com/msitarzewski/agency-agents.git"
+# Pinned so an upstream push can't silently change our installed agent set. Bump deliberately
+# (re-run `git ls-remote "$AGENCY_REPO" HEAD` and update this value on purpose).
+AGENCY_SHA="00fb28a4cf60a719363dce0de67fafc6301857ce"
 
 say() { printf "\033[1;36m[eaos]\033[0m %s\n" "$*"; }
 
-mkdir -p "$AGENTS_DIR" "$SKILLS_DIR" "$COMMANDS_DIR" \
-         "$CONFIG_DIR/templates" "$EAOS_DIR/vendor"
+# Install a single file. If the destination already exists and differs from what we're about
+# to install, back it up to <dest>.bak first (once) — never silently clobber a local edit.
+install_file() {
+  local src="$1" dst="$2"
+  if [ -e "$dst" ]; then
+    cmp -s "$src" "$dst" && return 0   # identical → nothing to do (no mtime churn on re-runs)
+    cp -f "$dst" "$dst.bak"
+    say "  backed up modified file -> $dst.bak"
+  fi
+  cp -f "$src" "$dst"
+}
 
-# 1) Clone or update agency-agents (the persona library EAOS builds on).
+mkdir -p "$AGENTS_DIR" "$SKILLS_DIR" "$COMMANDS_DIR" \
+         "$CONFIG_DIR/templates" "$CONFIG_DIR/playbooks" "$CONFIG_DIR/memory-seed" "$EAOS_DIR/vendor"
+
+# 1) Clone or update agency-agents (the persona library EAOS builds on), pinned to AGENCY_SHA.
 if [ -d "$VENDOR_DIR/.git" ]; then
-  say "Updating agency-agents..."
-  git -C "$VENDOR_DIR" pull --ff-only || say "(skip update; offline?)"
+  say "Updating agency-agents (pinned @ ${AGENCY_SHA:0:12})..."
+  # Fetch only if the pinned commit isn't already local — routine re-runs stay offline-safe.
+  git -C "$VENDOR_DIR" cat-file -e "$AGENCY_SHA^{commit}" 2>/dev/null || \
+    git -C "$VENDOR_DIR" fetch --quiet origin "$AGENCY_SHA" 2>/dev/null || true
+  git -C "$VENDOR_DIR" checkout -q "$AGENCY_SHA" 2>/dev/null || say "(skip; offline or SHA unreachable?)"
 else
-  say "Cloning agency-agents..."
-  git clone --depth 1 "$AGENCY_REPO" "$VENDOR_DIR" || \
+  say "Cloning agency-agents @ ${AGENCY_SHA:0:12}..."
+  if git clone --quiet "$AGENCY_REPO" "$VENDOR_DIR" 2>/dev/null; then
+    git -C "$VENDOR_DIR" checkout -q "$AGENCY_SHA" || \
+      say "WARN: could not check out pinned SHA $AGENCY_SHA (using default branch tip instead)"
+  else
     say "WARN: could not clone agency-agents (offline?). EAOS core still installs."
+  fi
 fi
 
 # 2) Install agency-agents personas (prefixed, so they never clash with EAOS names).
@@ -33,41 +55,93 @@ if [ -d "$VENDOR_DIR" ]; then
   say "Installing agency-agents personas -> $AGENTS_DIR"
   find "$VENDOR_DIR" -name '*.md' -not -iname 'readme*' -print0 2>/dev/null | \
     while IFS= read -r -d '' f; do
-      cp -f "$f" "$AGENTS_DIR/agency-$(basename "$f")"
+      install_file "$f" "$AGENTS_DIR/agency-$(basename "$f")"
     done
 fi
 
 # 3) Install EAOS engineering personas (the collaborating team).
 say "Installing EAOS engineering agents -> $AGENTS_DIR"
-cp -f "$EAOS_DIR/agents/"*.md "$AGENTS_DIR/" 2>/dev/null || true
-rm -f "$AGENTS_DIR/README.md" 2>/dev/null || true   # don't install the folder readme as an agent
+for f in "$EAOS_DIR"/agents/*.md; do
+  [ -e "$f" ] || continue
+  base="$(basename "$f")"
+  [ "$base" = "README.md" ] && continue   # don't install the folder readme as an agent
+  install_file "$f" "$AGENTS_DIR/$base"
+done
 
 # 4) Install the slash commands.
 #    /agentic-os is registered under BOTH /agentic-os and /agent-os so either name works.
-say "Installing /agentic-os (+ /agent-os alias) + /incident commands -> $COMMANDS_DIR"
-cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
-cp -f "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agent-os.md"
-cp -f "$EAOS_DIR/commands/incident.md"   "$COMMANDS_DIR/incident.md"
+say "Installing /agentic-os (+ /agent-os alias), /incident, /triage commands -> $COMMANDS_DIR"
+install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
+install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agent-os.md"
+install_file "$EAOS_DIR/commands/incident.md"   "$COMMANDS_DIR/incident.md"
+install_file "$EAOS_DIR/commands/triage.md"     "$COMMANDS_DIR/triage.md"
 
 # 5) Install global OS config the command reads at runtime.
 say "Installing OS config -> $CONFIG_DIR"
-mkdir -p "$CONFIG_DIR/templates" "$CONFIG_DIR/playbooks"
-cp -f "$EAOS_DIR/orchestrator/routing.yaml"   "$CONFIG_DIR/"
-cp -f "$EAOS_DIR/orchestrator/protocol.md"    "$CONFIG_DIR/"
-cp -f "$EAOS_DIR/orchestrator/loop.md"        "$CONFIG_DIR/"
-cp -f "$EAOS_DIR/orchestrator/orchestrator.md" "$CONFIG_DIR/"
-cp -f "$EAOS_DIR/templates/"*.md              "$CONFIG_DIR/templates/"
-cp -f "$EAOS_DIR/playbooks/"*.md              "$CONFIG_DIR/playbooks/"   # process playbooks (kernel selects one)
+install_file "$EAOS_DIR/orchestrator/routing.yaml"    "$CONFIG_DIR/routing.yaml"
+install_file "$EAOS_DIR/orchestrator/protocol.md"     "$CONFIG_DIR/protocol.md"
+install_file "$EAOS_DIR/orchestrator/loop.md"         "$CONFIG_DIR/loop.md"
+install_file "$EAOS_DIR/orchestrator/orchestrator.md" "$CONFIG_DIR/orchestrator.md"
+for f in "$EAOS_DIR"/templates/*.md; do
+  [ -e "$f" ] || continue
+  install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"
+done
+for f in "$EAOS_DIR"/playbooks/*.md; do
+  [ -e "$f" ] || continue
+  install_file "$f" "$CONFIG_DIR/playbooks/$(basename "$f")"
+done
+
+# 5b) Seed the memory index so a fresh project has something to copy on its first run
+#     (memory/README.md: index.md is "always loaded" — the command's Step 0 seeds from here).
+say "Seeding memory index -> $CONFIG_DIR/memory-seed"
+install_file "$EAOS_DIR/memory/index.md"  "$CONFIG_DIR/memory-seed/index.md"
+install_file "$EAOS_DIR/memory/README.md" "$CONFIG_DIR/memory-seed/README.md"
+
+# 5c) Install the degraded-mode procedure the installed protocol/verifier reference at
+#     runtime (protocol.md and agents/verifier.md point to adapters/solo-mode.md, resolved
+#     relative to $CONFIG_DIR).
+say "Installing solo-mode fallback -> $CONFIG_DIR/adapters"
+mkdir -p "$CONFIG_DIR/adapters"
+install_file "$EAOS_DIR/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
 
 # 6) Install EAOS skills.
+# Backups go OUTSIDE $SKILLS_DIR: Claude Code discovers every directory under skills/ as a
+# skill, so a foo.bak/ dir there would register a duplicate phantom skill.
+SKILL_BACKUPS="$CONFIG_DIR/skill-backups"
 say "Installing EAOS skills -> $SKILLS_DIR"
-for d in "$EAOS_DIR/skills/"*/; do [ -d "$d" ] && cp -rf "$d" "$SKILLS_DIR/"; done
+for d in "$EAOS_DIR/skills/"*/; do
+  [ -d "$d" ] || continue
+  name="$(basename "$d")"
+  dst="$SKILLS_DIR/$name"
+  if [ -d "$dst" ] && ! diff -rq "$d" "$dst" >/dev/null 2>&1; then
+    mkdir -p "$SKILL_BACKUPS"
+    rm -rf "$SKILL_BACKUPS/$name"
+    cp -Rf "$dst" "$SKILL_BACKUPS/$name"
+    say "  backed up modified skill -> $SKILL_BACKUPS/$name"
+  fi
+  # Remove-then-copy so files deleted upstream don't linger in the installed skill.
+  # ${d%/} strips the glob's trailing slash — with it, BSD cp would splat the CONTENTS
+  # of every skill into $SKILLS_DIR instead of copying the directory itself.
+  rm -rf "$dst"
+  cp -Rf "${d%/}" "$SKILLS_DIR/"
+done
 
 say ""
 say "Verifying install:"
-for f in commands/agentic-os.md commands/agent-os.md eaos/orchestrator.md agents/codebase-analyst.md eaos/routing.yaml; do
+for f in commands/agentic-os.md commands/agent-os.md commands/incident.md commands/triage.md \
+         eaos/orchestrator.md eaos/routing.yaml eaos/memory-seed/index.md; do
   if [ -e "$CLAUDE_DIR/$f" ]; then printf "  \033[0;32m✓\033[0m %s\n" "~/.claude/$f"; else printf "  \033[0;31m✗ MISSING\033[0m %s\n" "~/.claude/$f"; fi
 done
+# Agents: derive the required set from every agents/*.md basename (except README) — the same
+# list scripts/eaos-doctor.sh uses, so the two health checks can never drift apart.
+need_agents="$(cd "$EAOS_DIR/agents" && ls *.md 2>/dev/null | sed 's/\.md$//' | grep -v '^README$')"
+miss=""
+for a in $need_agents; do [ -e "$AGENTS_DIR/$a.md" ] || miss="$miss $a"; done
+if [ -z "$miss" ]; then
+  printf "  \033[0;32m✓\033[0m all EAOS worker personas installed\n"
+else
+  printf "  \033[0;31m✗ MISSING agents:\033[0m%s\n" "$miss"
+fi
 say ""
 say "Installed. Runtime state is PROJECT-LOCAL: each run creates ./.eaos/<task-id>/ where you"
 say "invoke it (war room, artifacts) plus ./.eaos/memory/ (decisions, patterns, lessons)."

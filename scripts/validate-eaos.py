@@ -158,6 +158,48 @@ if routing and isinstance(routing.get("playbooks"), dict):
         if f:
             (ok if exists(f) else err)(f"routing.playbooks['{pname}'].file exists: {f}")
 
+# ---------- 4c-pre. playbook phase-table participants must appear in that playbook's roster ----------
+# Catches the release/tech-writer class of bug: a phase table names a persona that was never
+# added to the roster block. "orchestrator" is exempt — it's the always-present narrator role,
+# never a roster-listed spawnable agent (see scripts/eaos-doctor.sh's own comment on this).
+# Requires a real YAML parse: the fallback frontmatter parser can't read nested roster lists,
+# so without PyYAML this check would flag every participant as un-rostered (false errors).
+if os.path.isdir(pb_dir) and HAVE_YAML:
+    for f in sorted(os.listdir(pb_dir)):
+        if not f.endswith(".md") or f.lower() == "readme.md":
+            continue
+        rel = f"playbooks/{f}"
+        text = read(os.path.join(ROOT, rel))
+        fm = frontmatter(text)
+        if not fm:
+            continue
+        roster = fm.get("roster") or {}
+        roster_names = set()
+        if isinstance(roster, dict):
+            for grp in ("always", "optional"):
+                roster_names.update(roster.get(grp, []) or [])
+        lines = text.splitlines()
+        header_idx = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("|") and "Participants" in line:
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+        cols = [c.strip() for c in lines[header_idx].strip().strip("|").split("|")]
+        if "Participants" not in cols:
+            continue
+        p_col = cols.index("Participants")
+        for line in lines[header_idx + 2:]:
+            if not line.strip().startswith("|"):
+                break
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) <= p_col:
+                continue
+            for name in re.findall(r"[a-z][a-z-]+", cells[p_col]):
+                if name in agent_names and name != "orchestrator" and name not in roster_names:
+                    err(f"{rel}: phase-table participant '{name}' not in roster (always/optional)")
+
 # ---------- 4c. command files: referenced personas/skills/playbooks must exist ----------
 cmd_dir = os.path.join(ROOT, "commands")
 if os.path.isdir(cmd_dir):
@@ -199,6 +241,60 @@ for rel in ref_sources:
             referenced.add(m.group(1))
 for t in sorted(referenced):
     (ok if exists(f"templates/{t}") else err)(f"referenced template exists: templates/{t}")
+
+# ---------- 6b. orphan templates: every templates/*.md should be referenced somewhere ----------
+templates_dir = os.path.join(ROOT, "templates")
+if os.path.isdir(templates_dir):
+    referenced_all = set(referenced)
+    skip_dirs = {".git", "vendor", "node_modules"}
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        rel_dir = os.path.relpath(dirpath, ROOT)
+        if rel_dir == "templates" or rel_dir.startswith("templates" + os.sep):
+            continue
+        for fn in filenames:
+            if not (fn.endswith(".md") or fn.endswith(".yaml") or fn.endswith(".yml")):
+                continue
+            try:
+                t = read(os.path.join(dirpath, fn))
+            except Exception:
+                continue
+            for m in re.finditer(r"templates/([\w-]+\.md)", t):
+                referenced_all.add(m.group(1))
+    for fn in sorted(os.listdir(templates_dir)):
+        if not fn.endswith(".md") or fn.lower() == "readme.md":
+            continue
+        if fn in referenced_all:
+            ok(f"template referenced: templates/{fn}")
+        else:
+            warn(f"orphan template (zero references): templates/{fn}")
+
+# ---------- 7. path convention: agent runtime-state paths must use the .eaos/ prefix ----------
+# Canon (routing.yaml > runtime): '.eaos/<task-id>/artifacts/…' and '.eaos/memory/…'. A bare
+# 'artifacts/<' or 'memory/' path in an agent persona is A3-class drift — flag it. A line that
+# already contains '.eaos/' is assumed to be using the canonical form somewhere in it.
+for rel in sorted(persona_files):
+    if not exists(rel):
+        continue
+    for i, line in enumerate(read(os.path.join(ROOT, rel)).splitlines(), 1):
+        if "artifacts/<" in line and ".eaos/" not in line:
+            err(f"{rel}:{i}: bare 'artifacts/<' path — should be under '.eaos/<task-id>/artifacts/'")
+        if "memory/" in line and ".eaos/memory" not in line:
+            err(f"{rel}:{i}: bare 'memory/' path — should be '.eaos/memory/...'")
+
+# ---------- 8. setup.sh installs every commands/*.md ----------
+# (The old check on doctor's need_agents list was removed: doctor now derives the list
+# dynamically from agents/*.md, so the hardcoded-list drift class it guarded no longer exists.)
+setup_rel = "setup.sh"
+if os.path.isdir(cmd_dir) and exists(setup_rel):
+    # Match only non-comment lines so a commented-out install line doesn't pass.
+    setup_lines = [l for l in read(os.path.join(ROOT, setup_rel)).splitlines()
+                   if not l.lstrip().startswith("#")]
+    setup_text = "\n".join(setup_lines)
+    for f in sorted(os.listdir(cmd_dir)):
+        if not f.endswith(".md"):
+            continue
+        (ok if f"commands/{f}" in setup_text else err)(f"{setup_rel} installs commands/{f}")
 
 # ---------- report ----------
 print("EAOS validation\n" + "=" * 40)

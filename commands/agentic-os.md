@@ -56,10 +56,16 @@ chatter stay on disk.
 mkdir -p .eaos/memory/decisions .eaos/memory/patterns .eaos/memory/lessons .eaos/memory/codebase
 N=$(printf "T-%03d" $(( $(ls .eaos 2>/dev/null | grep -c '^T-') + 1 )))
 mkdir -p ".eaos/$N/artifacts"
+# Seed the memory index on this project's first run (memory/README.md: index.md is "always
+# loaded" — make that true from task one instead of starting from nothing).
+[ -e .eaos/memory/index.md ] || cp "$HOME/.claude/eaos/memory-seed/index.md" .eaos/memory/index.md 2>/dev/null || true
 echo "$N"
 ```
 
 - Create the war room at `.eaos/<id>/warroom.md` with a header (task, date, status: active).
+- Read `.eaos/memory/index.md` (seeded above if this is the project's first run) — it's the
+  always-loaded summary of decisions/patterns/lessons; open a full file only when a line in it
+  looks relevant to this task.
 - Scan `.eaos/memory/decisions/` and `.eaos/memory/patterns/` — reuse prior ADRs/patterns
   instead of re-deriving them.
 
@@ -136,8 +142,14 @@ spot, spawn `developer` to make the change + self-review, then go to Step 8.
 Apply `routing.yaml`:
 - Start with `always` = requirements, developer, code-reviewer.
 - Add each `conditional` agent whose `when` rule matches the complexity/signals.
-- Respect the token budget: if over, downgrade conditional agents one model tier, then drop
-  the lowest-value one — and note the omission in the war room.
+- Respect the spawn budget (`routing.yaml > budget.max_agent_spawns_per_task`): tally every
+  subagent spawn in the war room as you go; when a spawn would exceed the cap, downgrade
+  conditional agents one model tier, then drop the lowest-value one — and note the omission
+  in the war room.
+- If a required governance gate's owner is not on the roster (the owners are declared in
+  `routing.yaml > autonomy.launch_review.owners` / `design_review`), add that owner to the
+  roster **for that gate only** (`routing.yaml > autonomy.gate_owners_auto_roster`)
+  — a mandatory gate must never fire against someone who was never routed in.
 
 Write a short "team roster + why" entry to the war room. Default to the FEWEST agents that
 satisfy the task.
@@ -280,7 +292,9 @@ pass, not the earlier one) and confirm:
 - every earlier REVIEW finding and QA bug is actually resolved,
 - no leftovers: debug logs, TODOs, commented-out/dead code,
 - no secrets/keys/tokens or `.env` committed,
-- all acceptance criteria are met.
+- **trivial/small only:** acceptance criteria all met (the verifier is skipped below these
+  complexities, so this is their only criteria gate; on standard/complex, `verifier` owns
+  criteria grading at the independent-verify gate — graded once, by the checker, not twice).
 Any item fails → loop back to Step 5 (IMPLEMENT) and fix. Never push unreviewed or flagged code.
 
 **(2) Run the project's own code checks.** `test`, `build`, `lint` using the verified commands
@@ -330,8 +344,14 @@ artifacts.
 - **Refresh the repo map** if this change altered structure/commands/key modules, and re-stamp
   `.eaos/memory/codebase/map.meta` — so the next task starts from an accurate map.
 - Mark the war room `status: done`.
-- Give the human a concise summary: what was built, key decisions, risks accepted, and the
-  artifact paths. Then ask if they want any change or the destructive deploy step executed.
+- Produce `templates/final-report.md` as the LAST artifact
+  (`.eaos/<id>/artifacts/final-report.md`) — the plain-language bridge to the human: what was
+  asked, what was built, what was checked and the proof, decisions made along the way and why,
+  what was NOT done / risks accepted, and what needs a human decision. No jargon, no file paths
+  in the body (links at the bottom).
+- Close by pasting the **contents of `final-report.md`** to the human as your closing message —
+  not a paraphrase of it. Then ask if they want any change or the destructive deploy step
+  executed.
 
 ---
 
