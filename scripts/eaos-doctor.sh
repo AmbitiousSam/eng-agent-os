@@ -15,7 +15,7 @@ echo "========================================"
 
 echo "Installation (~/.claude):"
 [ -d "$CLAUDE_DIR" ] && pass "$CLAUDE_DIR exists" || bad "$CLAUDE_DIR missing — run ./setup.sh"
-for f in commands/agentic-os.md commands/agent-os.md commands/incident.md commands/triage.md \
+for f in commands/agentic-os.md \
          eaos/routing.yaml eaos/protocol.md eaos/loop.md eaos/orchestrator.md \
          eaos/memory-seed/index.md eaos/adapters/solo-mode.md eaos/bin/eaos; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
@@ -103,6 +103,6 @@ else
 fi
 
 echo "========================================"
-if [ "$fail" = 0 ]; then echo -e "\033[0;32mHealthy.\033[0m  Try:  /agentic-os <task>   (alias: /agent-os)"; else
+if [ "$fail" = 0 ]; then echo -e "\033[0;32mHealthy.\033[0m  Try:  /agentic-os <task>"; else
   echo -e "\033[0;31mIssues found.\033[0m  Fix the ✗ items above (usually: ./setup.sh)."; fi
 exit $fail

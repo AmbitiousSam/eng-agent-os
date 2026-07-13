@@ -50,5 +50,5 @@ Priorities: **P1** breaks people now, **P2** will break soon or blocks work, **P
 ## Scheduling
 
 Designed to run unattended on a schedule (cron, scheduled task, or a nightly CI job)
-or on demand via `/triage`. Since it is read-only and dedupes itself, running it too
+or on demand via `/agentic-os triage`. Since it is read-only and dedupes itself, running it too
 often is harmless.

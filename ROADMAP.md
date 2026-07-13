@@ -8,7 +8,7 @@ guides, and sensors.
 - **Kernel:** orchestrator, protocol (sole-writer war room + relay), memory, human gates,
   clarify-only-when-blocking, pre-push gate (self-review → project code checks).
 - **Playbooks:** runner + registry; `feature-delivery`, `bug-fix`, `incident-response`
-  (read-only/advisory, with `/incident`), `investigation` (`kind: question`).
+  (read-only/advisory), `investigation` (`kind: question`).
 - **13 personas** incl. codebase-analyst (GROUND: repo map + impact map) and incident-commander.
 - **Mechanical enforcement:** `validate-eaos.py` (routing↔personas↔playbooks↔commands↔
   templates cross-checks), `eaos-doctor.sh`, Makefile, pre-push hooks (repo + per-project).
@@ -20,7 +20,7 @@ guides, and sensors.
 - **Product tier:** `product-framing` playbook (`kind: product`: FRAME → PRFAQ human gate →
   epics → sequenced backlog) + prfaq/epic templates; CodeGraph-preferred GROUND with grep
   fallback (`integrations.codegraph`); GitHub Actions CI (`make test` on push/PR).
-- **Autonomy tier:** `/triage` command + skill (read-only discovery inbox, never auto-starts),
+- **Autonomy tier:** triage skill (read-only discovery inbox via the front door, never auto-starts),
   `launch-review` governance gate (security/privacy/ORR, GO/NO-GO before ship),
   `memory-consolidation` skill (supersede/merge/prune + index rebuild).
 - **Smart parallelism** (scales with complexity; sequential for trivial/small) + **IDE
@@ -60,7 +60,7 @@ guides, and sensors.
 ## Remaining — requires real usage, not more building
 1. **Capture real runs** into `examples/runs/` (folder + guide ready) — evidence over claims.
 2. **Live-test the adapters** in Cursor/Codex/Devin; tune install paths per tool version.
-3. **Schedule `/triage`** in your environment (cron / scheduled task / CI nightly).
+3. **Schedule `/agentic-os triage`** in your environment (cron / scheduled task / CI nightly).
 4. **Wire the PromptDiagnoser** in `sre-incident-responder` to your LLM provider.
 5. **Tune from friction:** every misroute → a hint tweak; every recurring failure → a new
    guide/sensor/validator check. The steering loop is now the roadmap.

@@ -1,6 +1,6 @@
 # SRE Incident Response Agent — setup & trigger modes
 
-An `incident-commander` persona + `/incident` command that investigates a production incident
+An `incident-commander` persona (reached via `/agentic-os` fast triage) that investigates a production incident
 by correlating **AWS signals** with the **actual codebase** (reusing EAOS's GROUND/impact-map
 machinery), producing immediate actions (human-executed), later actions, and a full RCA. Read-
 only against AWS — it never executes a mutating/destructive call itself.
@@ -9,7 +9,7 @@ only against AWS — it never executes a mutating/destructive call itself.
 
 ```bash
 cd your-project        # the repo(s) the incident's service maps to
-/incident <paste the CloudWatch alarm / PagerDuty page / Slack alert / description>
+/agentic-os <paste the CloudWatch alarm / PagerDuty page / Slack alert / description>
 ```
 That's it — this is the "on-demand" trigger mode. Whoever is on call pastes the alert in and it
 investigates immediately. No standing infrastructure required.
@@ -21,11 +21,11 @@ Start with on-demand; upgrade only when the manual step is actually the bottlene
 
 | Mode | What it means | Infra needed | When to use |
 |---|---|---|---|
-| **On-demand** | A human pastes the alert into `/incident` | None | Start here. Works today. |
+| **On-demand** | A human pastes the alert into `/agentic-os` | None | Start here. Works today. |
 | **Polling** | A scheduled task checks for new alarms every N minutes and auto-invokes | A scheduled task (cron / Claude Code scheduled task) + AWS read credentials pre-configured | Once you're tired of manually pasting alerts, but don't need sub-minute response |
 | **Push (webhook)** | AWS EventBridge/SNS or PagerDuty fires a webhook the instant an alarm triggers, invoking the agent within seconds | A small receiver (Lambda/API Gateway or any webhook endpoint) that shells out to Claude Code / this command | True "always on." Needs a standing service outside Claude Code itself — this is the only mode that's a real infrastructure project, not just a config change. |
 
-None of this changes the persona or the command — `incident-commander.md` and `/incident` are
+None of this changes the persona or the command — `incident-commander.md` and the front door are
 written to be trigger-agnostic. The only thing that changes is *what calls them*.
 
 ## AWS access — read-only IAM policy (starting point)

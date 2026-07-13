@@ -453,8 +453,7 @@ eng-agent-os/                  # the repo (version this; it IS the distribution)
 ├── ROADMAP.md                 # phased plan + business-pack extension
 ├── setup.sh                   # bootstrap: clone agency-agents + install everything
 ├── commands/
-│   ├── agentic-os.md          # the front door: any task (feature/bug/question/…)
-│   └── incident.md            # /incident — live-incident entry point
+│   └── agentic-os.md          # THE front door: any task (feature/bug/incident/question/triage/…)
 ├── playbooks/                 # PROCESSES riding on the kernel (one file each)
 │   ├── feature-delivery.md · bug-fix.md · incident-response.md · investigation.md
 ├── orchestrator/              # the KERNEL

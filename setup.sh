@@ -69,13 +69,17 @@ for f in "$EAOS_DIR"/agents/*.md; do
   install_file "$f" "$AGENTS_DIR/$base"
 done
 
-# 4) Install the slash commands.
-#    /agentic-os is registered under BOTH /agentic-os and /agent-os so either name works.
-say "Installing /agentic-os (+ /agent-os alias), /incident, /triage commands -> $COMMANDS_DIR"
+# 4) Install THE slash command. One front door: /agentic-os fast-triages every shape of task
+#    (feature, bug, incident, question, product, venture, release, triage) to its playbook.
+say "Installing /agentic-os -> $COMMANDS_DIR"
 install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
-install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agent-os.md"
-install_file "$EAOS_DIR/commands/incident.md"   "$COMMANDS_DIR/incident.md"
-install_file "$EAOS_DIR/commands/triage.md"     "$COMMANDS_DIR/triage.md"
+# Remove commands earlier EAOS versions installed (now folded into the front door).
+for stale in agent-os.md incident.md triage.md; do
+  if [ -e "$COMMANDS_DIR/$stale" ]; then
+    rm -f "$COMMANDS_DIR/$stale" "$COMMANDS_DIR/$stale.bak"
+    say "  removed legacy command -> $COMMANDS_DIR/$stale (use /agentic-os)"
+  fi
+done
 
 # 5) Install global OS config the command reads at runtime.
 say "Installing OS config -> $CONFIG_DIR"
@@ -135,7 +139,7 @@ done
 
 say ""
 say "Verifying install:"
-for f in commands/agentic-os.md commands/agent-os.md commands/incident.md commands/triage.md \
+for f in commands/agentic-os.md \
          eaos/orchestrator.md eaos/routing.yaml eaos/memory-seed/index.md; do
   if [ -e "$CLAUDE_DIR/$f" ]; then printf "  \033[0;32m✓\033[0m %s\n" "~/.claude/$f"; else printf "  \033[0;31m✗ MISSING\033[0m %s\n" "~/.claude/$f"; fi
 done
@@ -154,4 +158,4 @@ say "Installed. Runtime state is PROJECT-LOCAL: each run creates ./.eaos/<task-i
 say "invoke it (war room, artifacts) plus ./.eaos/memory/ (decisions, patterns, lessons)."
 say ""
 say "Usage — from inside any project, in Claude Code (RESTART Claude Code after first install):"
-say "    /agentic-os <task>      (alias: /agent-os <task>)"
+say "    /agentic-os <task>      (the one command — features, bugs, incidents, questions, triage)"

@@ -1,6 +1,6 @@
 ---
 name: incident-response
-command: /incident
+command: /agentic-os
 trigger: "kind == incident"
 roster:
   always: [incident-commander]
@@ -12,7 +12,7 @@ exit_condition: "cited root-cause hypothesis (or explicit unknown+needs), immedi
 
 # Playbook: Incident Response (read-only, advisory)
 
-Live-incident process. Selected by `/incident` or `kind: incident`. The **incident-commander**
+Live-incident process. Selected by fast triage (`kind: incident` — an incident-shaped ask at the `/agentic-os` front door). The **incident-commander**
 persona owns it end to end, running `skills/incident-response/SKILL.md`. Speed-first per
 `routing.yaml > incident` (`fast_gates`, `mitigate_before_root_cause`): stop the bleeding with
 *advised* actions before deep diagnosis; ceremony is cut, kernel safety is not.

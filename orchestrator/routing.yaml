@@ -21,7 +21,7 @@ playbooks:
     hints: [bug, broken, fails, wrong, regression, crash, "doesn't work"]
   incident-response:
     file: playbooks/incident-response.md
-    command: /incident          # shortcut; /agentic-os reaches it via fast triage
+    command: /agentic-os        # one front door; fast triage skips intake ceremony for incidents
     trigger: "kind == incident"
     fast_path: true             # skip normal INTAKE; incident-commander's INGEST takes over
     hints: [outage, down, "5xx", alarm, paged, incident, degraded, "prod is"]

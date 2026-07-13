@@ -6,8 +6,8 @@ playbook** and runs that playbook's phases under kernel rules. The playbooks liv
 (feature, bug, incident, rfc, release…) plug in as files.
 
 ## How the runner works
-1. **Select the playbook** from `routing.yaml > playbooks` by `trigger` (task `kind`) or an
-   explicit command (`/agentic-os` → feature-delivery/bug-fix; `/incident` → incident-response…).
+1. **Select the playbook** from `routing.yaml > playbooks` by `trigger` (task `kind`), set by
+   `/agentic-os`'s fast triage — the single front door reaches every playbook.
 2. **Load its phases + roster.** The roster's `always` agents run; `optional` agents activate
    per the conditional signal rules in `routing.yaml`.
 3. **Run each phase** with its entry/exit gate. The kernel behaviors below apply to *every*

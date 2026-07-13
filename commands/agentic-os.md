@@ -104,11 +104,14 @@ DEPLOY, DOCUMENT, STABILIZE) also calls `eaos phase <id> <PHASE>`.
   playbook (progressive rollout, human executes every step).
 - **Change-shaped** (build/fix/refactor) → proceed to Step 1 INTAKE; the analyst's `kind` then
   confirms `feature-delivery` vs `bug-fix` from `routing.yaml > playbooks`.
+- **Triage-shaped** (no task at all — "triage", "scan the repo", "what needs attention?") →
+  run `skills/triage` read-only: produce the prioritized inbox, propose tasks, start NOTHING
+  without the human picking one.
 - Ambiguous → default to Step 1 INTAKE (it classifies properly).
 
 Load the selected playbook's phases + roster from `playbooks/<name>.md` and run them under the
-kernel rules in `loop.md`. A dedicated command (e.g. `/incident`) is just a shortcut that
-pre-selects — `/agentic-os` alone must reach every playbook. Note the selection in the war room.
+kernel rules in `loop.md`. `/agentic-os` is the ONLY command — it must reach every playbook via
+this fast triage. Note the selection in the war room.
 
 **PARALLELISM (standing rule — but it must EARN its cost).** Parallelism scales with
 complexity (`routing.yaml > parallelism.scale_by_complexity`); it is never the default:
