@@ -1,217 +1,68 @@
 # Engineering Agentic OS (EAOS)
 
 A portable "operating system" that runs software engineering work as a **collaborating team
-of AI agents** — architect, developer, QA, security, devops, platform, SRE, reviewer, writer —
-coordinated by an orchestrator that runs a real engineering loop (understand → plan → build →
-review → test → ship → stabilize) and pulls in only the agents a task actually needs.
+of AI agents** — architect, developer, QA, security, devops, SRE, reviewer — coordinated by an
+orchestrator that runs a real engineering loop (understand → plan → build → review → test →
+ship → stabilize) and pulls in only the agents a task actually needs.
 
-It runs on **stock Claude Code subagents** (no experimental features required — the
-orchestrator owns coordination itself). EAOS works **standalone**; if
-[`agency-agents`](https://github.com/msitarzewski/agency-agents) is present, EAOS can delegate
-specialized subtasks to those personas. The layer EAOS adds over a plain persona library:
-**real agent-to-agent collaboration** — routing, a shared war room, review loops, memory, and
-human gates.
+![EAOS two-loop architecture](loop-arch.png)
+*The Claude Code standard/complex path: human at the gates, orchestrator's higher loop,
+isolated workers, shared `.eaos/` state, independent verifier.*
 
-> Full design rationale lives in [`AGENT_OS.md`](./AGENT_OS.md). Read that first.
-
-## EAOS vs. plain Claude Code subagents
-
-| Plain subagents | EAOS |
-|---|---|
-| Isolated experts you invoke one at a time | A **routed team** the orchestrator assembles per task |
-| No shared state; context lost between them | A **war room** + artifacts + project **memory** (auditable, resumable) |
-| You decide who runs and when | **routing.yaml** activates the fewest agents the task needs |
-| No convergence when they disagree | **One exchange → phase owner decides**; security can veto |
-| Edits can be unscoped / hallucinated | **GROUND** maps the repo + an impact map before editing |
-| Free-for-all on actions | **Human gates**: no deploy/push/migrate/spend without confirmation |
-
-## Quickstart (new machine)
+## Quickstart (Claude Code)
 
 ```bash
-git clone <your-fork>/eng-agent-os && cd eng-agent-os
-./setup.sh                  # installs command, personas, skills, config into ~/.claude
-./scripts/eaos-doctor.sh    # verify install + that this project is ready  (or: make doctor)
+git clone https://github.com/AmbitiousSam/eng-agent-os.git && cd eng-agent-os
+./setup.sh                  # installs command, personas, skills, config, eaos CLI into ~/.claude
+./scripts/eaos-doctor.sh    # verify (or: make doctor)
 ```
 
-Then **restart Claude Code** (slash commands load at startup), and from inside any project:
+Restart Claude Code, then from inside any project:
 
 ```
 /agentic-os Add per-API-key rate limiting to our public REST API
 ```
 
-> The command is also installed as `/agent-os` (alias). If `/agentic-os` doesn't autocomplete,
-> run `./scripts/eaos-doctor.sh` — it tells you exactly what's missing.
+That's the whole interface. It runs autonomously and stops only at defined human gates:
+blocking product decisions, deadlocks, and destructive actions (push / deploy / migrate / spend).
 
-That's the whole interface. The command turns the main session into the **orchestrator**: it
-creates a war room, runs the full loop (requirements → clarify → plan → implement → review →
-test → ops → docs → stabilize), spawns only the specialists the task needs, and hands you a
-complete package. It runs **autonomously**, stopping only at defined human gates (blocking
-product decisions, deadlocks, and destructive/costly actions like an actual deploy).
+## The trust model
 
-### How it coordinates (no special harness features required)
+- **Bookkeeping is code, not prose.** The `eaos` runtime CLI enforces spawn budgets, loop-back
+  ceilings, gate checks, and an evidence-mandatory Definition-of-Done table with **binding exit
+  codes** — a final report cannot be produced while any acceptance criterion is unverified.
+- **Maker is never checker.** A fresh-context verifier grades every criterion with evidence
+  before a standard/complex task can complete.
+- **Everything is auditable files.** War room, artifacts, decisions, and memory live in
+  `./.eaos/` in your project — resumable across sessions and tools.
+- **Judgment stays human-steerable.** Routing, design convergence, and review quality are
+  prompts you can read and edit; the CLI does bookkeeping, not thinking.
 
-Communication is baked into the OS, not borrowed from any experimental feature. The
-orchestrator is the **sole writer of the war room**; each specialist subagent does its work,
-writes its own artifacts, and returns protocol messages; the orchestrator appends them and
-**relays** between agents. Peer messaging = orchestrator relay through files. State lives in
-`./.eaos/<task-id>/`, so a run is fully resumable.
+## Where it runs
 
-### Runtime layout (project-local, created on first run)
-
-```
-./.eaos/
-├── T-001/
-│   ├── warroom.md          # the team conversation (orchestrator-owned)
-│   └── artifacts/          # spec, impact-map, design, ADRs, tests, deploy guide, docs
-└── memory/
-    ├── decisions/ patterns/ lessons/   # this codebase's accumulated knowledge
-    └── codebase/map.md                 # cached repo map (built once, refreshed on git change)
-```
-
-> **First run on a repo** spends a little extra time building the repo map (structure, run/test
-> commands, conventions, danger zones). After that it's cached and only refreshed when the code
-> changes, so later tasks start fast. Every task also gets an **impact map** — exactly which
-> files/symbols/tests it touches — so the team edits the right places and stays in scope.
-
-## What's in here
-
-| Path | Purpose |
+| Tool | What you get |
 |---|---|
-| `AGENT_OS.md` | The complete design document (architecture, flows, routing, roadmap) |
-| `commands/agentic-os.md` | The `/agentic-os` slash command — the autonomous orchestrator driver |
-| `setup.sh` | Bootstrap: install command, personas, skills, config (+ optional agency-agents) |
-| `scripts/` | `validate-eaos.py`, `eaos-doctor.sh`, `push-to-github.sh` |
-| `Makefile` | `make install / doctor / validate / test` |
-| `orchestrator/` | The **kernel**: orchestrator role + routing + protocol + the loop *runner* |
-| `playbooks/` | **Processes** (feature-delivery, bug-fix, …) that ride on the kernel |
-| `agents/` | The 11 engineering personas incl. `codebase-analyst` (+ relation to agency-agents) |
-| `skills/` | Reusable procedures (intake, test-plan, deploy guide, codebase-map, bug-triage) |
-| `templates/` | Output templates (spec, design, ADR, review, test plan, impact/codebase map) |
-| `memory/` | Durable project knowledge (decisions / patterns / lessons / codebase map) |
-| `harnesses/` | Per-topology guide+sensor bundles instantiated for new services |
-| `adapters/` | Run EAOS from Cursor / Windsurf-Devin / Codex (same `.eaos/` state) |
-| `CUSTOMIZE.md` · `RUN.md` · `docs/IDE-SETUP.md` | Customization, Claude Code run guide, IDE setup |
-| `examples/` · `ROADMAP.md` | Worked walkthrough · phased build plan + business pack |
+| **Claude Code** | The full team: isolated subagents, parallelism by complexity, model tiers, fresh verifier |
+| **Cursor / Codex / Windsurf-Devin / any AGENTS.md tool** | [Solo mode](adapters/solo-mode.md): one grounded, disciplined agent + the `eaos` CLI's DoD enforcement — honest about what degrades ([why](adapters/README.md)) |
 
-## Kernel + playbooks (v2)
+The `.eaos/` state and the `eaos` CLI port everywhere; start a task in Claude Code, resume it
+in Cursor.
 
-EAOS separates a constant **kernel** from pluggable **playbooks**:
+## Documentation
 
-- **Kernel** (`orchestrator/`) — orchestrator, protocol, war room, memory, human gates, and the
-  pre-push gate. Never changes per process.
-- **Playbooks** (`playbooks/`) — a process = phases + roster + gates + exit condition. The loop
-  runner selects one by task `kind`/command and runs it under the kernel. `feature-delivery` is
-  the default; `bug-fix` for `kind: bug`. Adding a process (incident-response, rfc, release…) is
-  *one file* + a line in `routing.yaml > playbooks` — the engine is untouched.
+**[📖 The wiki](https://github.com/AmbitiousSam/eng-agent-os/wiki)** — Quickstart, Architecture,
+Runtime CLI, IDE Adapters, Playbooks & Routing, Memory & State, Trust & Evals, Customizing.
 
-This is what lets EAOS grow toward a full engineering-org lifecycle without rewrites: every new
-way of working is a playbook on the same kernel.
-
-## Architecture (HLD) — the two loops
-![EAOS two-loop architecture: human at the gates, orchestrator higher loop, isolated workers with inner loops, shared .eaos state, independent verifier](loop-arch.png)
-**How to read it:**
-
-- **Two loops.** The *higher loop* is the orchestrator's control cycle (triage → route →
-  dispatch → verify → record). The *lower loops* are the workers: each runs its own
-  reason → act → observe → check micro-loop on its scoped unit, and keeps iterating until the
-  Definition of Done is confirmed — not until it *feels* done.
-- **The war room is the spine.** Workers are isolated and never talk to each other directly;
-  "peer messaging" is a relay — a worker returns a message, the orchestrator (the war room's
-  **sole writer**) records it and forwards what's relevant. No file races, no context
-  divergence, and the entire collaboration is an auditable, resumable log on disk. Workers
-  read shared state freely but write only their own artifact files.
-- **Done is graded, not claimed.** The maker never grades its own stop condition: an
-  independent **verifier** (fresh context, no authoring memory) checks every acceptance
-  criterion with evidence and re-runs the checks. REJECT loops the work back with structured
-  fix instructions; only APPROVE ends the loop.
-- **The human is a gate, not a bottleneck.** Enters at exactly four points: the initial
-  prompt, hard business decisions the code can't resolve, deadlocks, and destructive
-  approvals (push / deploy / migrate / spend). Everything else runs autonomously —
-  assume-and-proceed, logged in the war room for after-the-fact review.
-
-## Runs anywhere (the portability contract)
-
-EAOS is designed to be **injected into any machine, any IDE, any coding agent**. The contract
-that makes that true: the brain is markdown, the runtime is plain files, and every dependency
-beyond that is optional with a graceful fallback.
-
-| Layer | Requirement | Fallback |
-|---|---|---|
-| Brain (command, playbooks, personas, kernel) | any agent that reads files | — (pure markdown) |
-| Runtime state (`./.eaos/`) | a filesystem | — (portable across tools & machines; resumable) |
-| `setup.sh` install | bash + git (macOS/Linux; **Windows: Git Bash or WSL**) | copy files manually — it's only `cp` |
-| Validator / doctor / Makefile | python3 (+pyyaml), bash | skip — they're dev-time checks, not runtime |
-| Entry point | Claude Code `/agentic-os` · Cursor rule · Windsurf workflow · Codex/**any AGENTS.md tool** (`adapters/`) | no subagent isolation → **`adapters/solo-mode.md`** (grounded single agent; do NOT role-play the team) |
-| Integrations (agency-agents, CodeGraph, ponytail, rtk) | each optional, per-OS installers | EAOS runs bare — see table below |
-
-Practical Windows note: everything except the convenience scripts is OS-neutral; run `setup.sh`
-from Git Bash (ships with git) or WSL, or copy `commands/ agents/ skills/ playbooks/
-orchestrator/ templates/` into `~/.claude/` (or `%USERPROFILE%\.claude\`) by hand. rtk's
-auto-rewrite hook needs WSL on Windows (filters work natively); CodeGraph and ponytail are
-node-based and cross-platform.
-
-## Optional integrations (auto-detected, graceful without)
-
-EAOS runs bare, but four ecosystem tools each cut a different cost/quality axis. Install any
-subset; `./scripts/eaos-doctor.sh` reports what's active.
-
-| Tool | Axis | Install | Without it |
-|---|---|---|---|
-| [agency-agents](https://github.com/msitarzewski/agency-agents) | extra specialist personas | via `setup.sh` (automatic) | core personas do it all |
-| [CodeGraph](https://github.com/colbymchenry/codegraph) | context: cheap, precise code understanding | `npx @colbymchenry/codegraph` + `codegraph init` | GROUND uses grep |
-| [ponytail](https://github.com/DietrichGebert/ponytail) | output code: write the least that works | `/plugin install ponytail@ponytail` | ladder + reviewer delete-list are baked into personas |
-| [rtk](https://github.com/rtk-ai/rtk) | command output: −60–90% tokens on shell results | `brew install rtk && rtk init -g` | raw output (more tokens, same behavior) |
-
-They compose: CodeGraph cuts *exploration* tokens, rtk cuts *execution-output* tokens,
-ponytail cuts *generated-code* volume, agency-agents deepens specialization — four different
-taxes, one lean OS.
-
-## Modes — it knows when *not* to activate itself
-
-EAOS scales effort to the task (set by complexity at intake). It won't run a 10-agent loop for a
-typo.
-
-| Mode | Triggers | Who runs |
-|---|---|---|
-| **trivial** | typo, one-line config, copy fix, dep bump | developer only (quick localize + self-review) |
-| **small** | tiny feature/fix | requirements + developer + code-reviewer |
-| **standard** | normal feature/bug | + GROUND (codebase map/impact), architect, QA, review/test loops |
-| **complex** | new service, cross-cutting, perf/security-critical | + security, devops, platform, SRE, tech-writer |
-
-The 4-agent **MVP loop** (requirements → architect+developer plan → developer implements →
-reviewer reviews) is the recommended starting point; the full specialist set is opt-in for
-standard/complex tasks. See `AGENT_OS.md` §13.
-
-## Safety model
-
-One of the reasons to trust it on a real repo: it cannot take irreversible actions on its own.
-
-- **No destructive/costly action without your confirmation** — it will *propose* a deploy,
-  `git push`, migration, or anything that spends money, but never execute it autonomously.
-- **Least privilege** — each persona's tools are scoped in frontmatter (e.g. the reviewer is
-  read-only; the writer can't run shell) (enforced by Claude Code subagents; advisory text
-  elsewhere).
-- **Security can hard-veto** — a high-severity finding blocks delivery until mitigated.
-- **Full audit trail** — every decision/question/handoff is in `.eaos/<id>/warroom.md`.
-- **Bounded autonomy** — it stops at defined human gates (`routing.yaml > autonomy`) and
-  otherwise proceeds without pestering you. Set `mode: supervised` to confirm every phase.
+In-repo: [`AGENT_OS.md`](AGENT_OS.md) (full design doc) · [`ROADMAP.md`](ROADMAP.md) ·
+[`adapters/`](adapters/) · [`docs/EVAL-PROTOCOL.md`](docs/EVAL-PROTOCOL.md) ·
+[`CUSTOMIZE.md`](CUSTOMIZE.md) · [`RUN.md`](RUN.md)
 
 ## Develop / validate
 
 ```bash
 make doctor      # install + project readiness
-make validate    # mechanical repo consistency (routing ↔ personas ↔ templates)
-make test        # shell syntax checks + validator (CI entrypoint)
+make test        # shell syntax + structural validator + eval fixture + CLI unit tests
 ```
-
-`scripts/validate-eaos.py` parses `routing.yaml`, every persona's frontmatter, and cross-checks
-that routing names, agents, and template references all line up — so the OS contract is
-*enforced*, not just documented.
-
-## MVP first
-
-Start with 4 agents and one linear loop (requirements → architect+developer → developer →
-reviewer). See `AGENT_OS.md` §13. Everything else is additive.
 
 ## License / attribution
 
