@@ -25,6 +25,7 @@ test: ## Syntax-check shell scripts + run the validator + the eval-fixture check
 	  bash -n "$$s" && echo "$$s: syntax OK"; done
 	@python3 scripts/validate-eaos.py
 	@python3 scripts/eval_check.py
+	@python3 scripts/test_eaos.py
 
 check: test ## Alias for test (CI entrypoint)
 

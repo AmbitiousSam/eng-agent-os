@@ -23,10 +23,11 @@ playbook** and runs that playbook's phases under kernel rules. The playbooks liv
 - **Gate enforcement** — a phase does not advance until its exit gate is met; unmet gates
   (missing info, hard disagreement, loop > `loop_guard.max_same_issue_loops`) escalate to the
   human with a one-paragraph blocker summary.
-- **Loop-guard honesty** — `loop_guard`'s ceilings and attempt ledger (`routing.yaml`) are
-  **prompt-enforced**, not mechanically enforced, until the `eaos` runtime CLI exists (ROADMAP
-  backlog #1); the orchestrator must write the running loop counter into the war room after
-  every backward edge — a written counter is harder to quietly drop than a mental one.
+- **Loop-guard honesty** — `loop_guard`'s ceilings and attempt ledger (`routing.yaml`) are now
+  **mechanically enforced** by the `eaos` runtime CLI when installed (`eaos loopback` exit codes
+  are binding — a nonzero exit IS the deadlock/ceiling escalation); **prompt-enforced** only in
+  the no-CLI fallback, where the orchestrator must write the running loop counter into the war
+  room after every backward edge — a written counter is harder to quietly drop than a mental one.
 - **Backward edges (iteration)** — any phase may route work backward:
   - REVIEW `request-changes` → IMPLEMENT
   - TEST bug → IMPLEMENT

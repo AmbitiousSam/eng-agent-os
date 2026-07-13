@@ -17,9 +17,18 @@ echo "Installation (~/.claude):"
 [ -d "$CLAUDE_DIR" ] && pass "$CLAUDE_DIR exists" || bad "$CLAUDE_DIR missing — run ./setup.sh"
 for f in commands/agentic-os.md commands/agent-os.md commands/incident.md commands/triage.md \
          eaos/routing.yaml eaos/protocol.md eaos/loop.md eaos/orchestrator.md \
-         eaos/memory-seed/index.md eaos/adapters/solo-mode.md; do
+         eaos/memory-seed/index.md eaos/adapters/solo-mode.md eaos/bin/eaos; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
+# eaos runtime CLI: functional smoke check (mechanical bookkeeping degrades to prompt-only
+# enforcement without it — see commands/agentic-os.md > Runtime CLI).
+if [ -e "$CLAUDE_DIR/eaos/bin/eaos" ]; then
+  if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help >/dev/null 2>&1; then
+    pass "eaos CLI runs (~/.claude/eaos/bin/eaos --help)"
+  else
+    bad "eaos CLI present but failed to run — run ./setup.sh"
+  fi
+fi
 # required agents installed
 # orchestrator is NOT a spawnable agent — it's the role /agentic-os adopts on the main
 # session; its spec lives at ~/.claude/eaos/orchestrator.md (checked above).

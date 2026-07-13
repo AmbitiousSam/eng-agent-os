@@ -24,6 +24,17 @@ Read your operating config before you start:
 
 If `~/.claude/eaos/` is missing, the OS isn't installed — tell the human to run `setup.sh`.
 
+## Runtime CLI (mechanical bookkeeping)
+
+Locate `eaos`: `~/.claude/eaos/bin/eaos`, falling back to `scripts/eaos` in an eng-agent-os
+checkout. When present, thread every step below through it — **its exit codes are BINDING**:
+a nonzero `eaos loopback` IS the deadlock/ceiling escalation (stop, hand the human the printed
+ledger — not a suggestion to consider); a nonzero `eaos spawn` means downgrade/drop an agent
+before spawning, not after; a nonzero `eaos gate <id> <phase> --require` blocks the phase
+advance; `eaos verify --require` must pass before STABILIZE completes; and `eaos report`
+refusing means the task is NOT done, full stop. When the CLI is absent, all prose behavior
+below is unchanged — it is the fallback, not a stopgap.
+
 ---
 
 ## How communication works (baked in — no external features needed)
@@ -52,7 +63,8 @@ chatter stay on disk.
 ## Step 0 — Set up the run
 
 ```bash
-# Pick the next task id and create the project-local runtime.
+# With the eaos CLI: eaos init (idempotent) then eaos task new "<title>" prints the id N.
+# No-CLI fallback — same effect via raw bash:
 mkdir -p .eaos/memory/decisions .eaos/memory/patterns .eaos/memory/lessons .eaos/memory/codebase
 N=$(printf "T-%03d" $(( $(ls .eaos 2>/dev/null | grep -c '^T-') + 1 )))
 mkdir -p ".eaos/$N/artifacts"
@@ -61,6 +73,9 @@ mkdir -p ".eaos/$N/artifacts"
 [ -e .eaos/memory/index.md ] || cp "$HOME/.claude/eaos/memory-seed/index.md" .eaos/memory/index.md 2>/dev/null || true
 echo "$N"
 ```
+
+With the CLI present, every phase transition below (INTAKE, PLAN, IMPLEMENT, REVIEW, TEST,
+DEPLOY, DOCUMENT, STABILIZE) also calls `eaos phase <id> <PHASE>`.
 
 - Create the war room at `.eaos/<id>/warroom.md` with a header (task, date, status: active).
 - Read `.eaos/memory/index.md` (seeded above if this is the project's first run) — it's the
@@ -145,7 +160,8 @@ Apply `routing.yaml`:
 - Respect the spawn budget (`routing.yaml > budget.max_agent_spawns_per_task`): tally every
   subagent spawn in the war room as you go; when a spawn would exceed the cap, downgrade
   conditional agents one model tier, then drop the lowest-value one — and note the omission
-  in the war room.
+  in the war room. CLI: call `eaos spawn <id> --agent <name>` before each Task spawn; a nonzero
+  exit means downgrade/drop, not spawn-then-regret.
 - If a required governance gate's owner is not on the roster (the owners are declared in
   `routing.yaml > autonomy.launch_review.owners` / `design_review`), add that owner to the
   roster **for that gate only** (`routing.yaml > autonomy.gate_owners_auto_roster`)
@@ -228,7 +244,9 @@ files, and conventions, not an idealized version.
   the matching topology from `harnesses/` and instantiates it: guides → project rules, sensors
   → `tests/architecture/` via `skills/fitness-functions` (they ride the pre-push gate forever).
 
-Exit gate: developer agrees the design is buildable AND no open high-severity risk.
+Exit gate: developer agrees the design is buildable AND no open high-severity risk. CLI:
+record each check via `eaos gate <id> PLAN --check <name> --pass|--fail`, advance only after
+`eaos gate <id> PLAN --require` exits 0.
 
 ---
 
@@ -245,7 +263,8 @@ Exit gate: developer agrees the design is buildable AND no open high-severity ri
 - If the developer finds the impact map was incomplete (more files needed), send it back to
   GROUND to re-localize rather than guessing.
 
-Exit gate: code builds and self-tests pass.
+Exit gate: code builds and self-tests pass. CLI: `eaos gate <id> IMPLEMENT --check <name>
+--pass|--fail`, advance only after `eaos gate <id> IMPLEMENT --require` exits 0.
 
 ---
 
@@ -257,9 +276,13 @@ Exit gate: code builds and self-tests pass.
 - If security is on the roster, spawn it here too.
 - `request-changes` or `block` → relay findings to **developer**, who fixes and re-hands off →
   re-review. Track the loop count; if the **same issue** loops more than `max_same_issue_loops`
-  (routing.yaml, default 3), stop and escalate the deadlock to the human.
+  (routing.yaml, default 3), stop and escalate the deadlock to the human. CLI: every backward
+  edge (here and elsewhere) calls `eaos loopback <id> --edge "REVIEW->IMPLEMENT" --issue
+  "<stable-key>" --attempt "approach -> outcome"`; a nonzero exit IS the deadlock/ceiling
+  escalation — stop and hand the human the printed ledger.
 
-Exit gate: review `approve` and no blocking security finding.
+Exit gate: review `approve` and no blocking security finding. CLI: `eaos gate <id> REVIEW
+--check <name> --pass|--fail`, advance only after `eaos gate <id> REVIEW --require` exits 0.
 
 ---
 
@@ -273,6 +296,9 @@ Exit gate: review `approve` and no blocking security finding.
   regression test.
 
 Exit gate: all acceptance criteria pass; existing suite still green; critical paths covered.
+CLI: `eaos gate <id> TEST --check <name> --pass|--fail`, advance only after `eaos gate <id>
+TEST --require` exits 0; a QA bug-loop back to Step 5 is a backward edge — call `eaos
+loopback` for it too.
 
 ---
 
@@ -315,6 +341,8 @@ force-push, run migrations, or spend money without explicit human confirmation. 
 guide and *propose* the action; ask before executing it.
 
 Exit gate: deploy guide exists with a reasoned rollback; **code checks green** before any push.
+CLI: `eaos gate <id> DEPLOY --check <name> --pass|--fail`, advance only after `eaos gate <id>
+DEPLOY --require` exits 0.
 
 ---
 
@@ -322,7 +350,8 @@ Exit gate: deploy guide exists with a reasoned rollback; **code checks green** b
 
 If `tech-writer` is on the roster, spawn it (cheap model) → it compiles README/API
 docs/changelog + a human summary **from the artifacts only**. Exit gate: docs trace to real
-artifacts.
+artifacts. CLI: `eaos gate <id> DOCUMENT --check <name> --pass|--fail`, advance only after
+`eaos gate <id> DOCUMENT --require` exits 0.
 
 ---
 
@@ -336,7 +365,10 @@ artifacts.
   `sensor-feedback` format (WHAT / EVIDENCE / WHY / FIX DIRECTION / VERIFY) — never a raw
   dump. Only on APPROVE proceed to assemble the final package.
 - Record the verifier's per-criterion table in the retrospective as the regression signal.
-  (Trivial/small tasks: a brief self-score against criteria suffices.)
+  (Trivial/small tasks: a brief self-score against criteria suffices.) CLI: record each
+  criterion via `eaos verify <id> --criterion "AC-1" --verdict pass|fail --evidence "..."`;
+  the final package requires `eaos verify <id> --require` to pass, then `eaos report <id>` —
+  a refusal from either means the task is NOT done.
 - Assemble the final package: list every artifact in `.eaos/<id>/artifacts/` (code, spec,
   design, ADRs, review, tests, deploy guide, docs).
 - Write a short retrospective to `.eaos/memory/lessons/<id>.md`; promote any reusable solution

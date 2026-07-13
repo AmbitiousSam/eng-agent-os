@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+"""
+eaos — deterministic bookkeeping runtime for the Engineering Agentic OS.
+
+Moves the kernel's mechanical rules (task ids, war-room appends, loop ceilings, spawn
+budget, gates, DoD verification, final-report assembly) from prompt-enforcement to code.
+State lives under ./.eaos/ in the target project (cwd). Two files per task:
+  warroom.md   — human-readable, append-only log (byproduct, not parsed back)
+  state.json   — machine state: source of truth for every command below
+
+Exit codes: 0 = allowed/ok, 1 = ceiling hit / gate unmet / invalid, 2 = usage error.
+stdlib only (json/argparse/os/re/datetime). No third-party deps, ever.
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import sys
+
+MSG_TYPES = ["PROPOSE", "QUESTION", "CHALLENGE", "REVIEW", "RISK", "DECISION", "HANDOFF",
+             "STATUS", "VERDICT"]
+DEFAULT_CONFIG = {
+    "max_same_issue_loops": 3,
+    "max_total_loopbacks": 8,
+    "max_agent_spawns_per_task": 12,
+}
+
+# ---------- small io helpers ----------
+
+def now_iso():
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+def die(msg, code=2):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+def eaos_dir():
+    return os.path.join(os.getcwd(), ".eaos")
+
+def config_path():
+    return os.path.join(eaos_dir(), "config.json")
+
+def load_config():
+    p = config_path()
+    if not os.path.isfile(p):
+        die("config.json not found — run `eaos init` first", 2)
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+def task_dir(task_id):
+    d = os.path.join(eaos_dir(), task_id)
+    if not os.path.isdir(d):
+        die(f"no such task: {task_id}", 2)
+    return d
+
+def state_path(task_id):
+    return os.path.join(task_dir(task_id), "state.json")
+
+def warroom_path(task_id):
+    return os.path.join(task_dir(task_id), "warroom.md")
+
+def load_state(task_id):
+    p = state_path(task_id)
+    if not os.path.isfile(p):
+        die(f"no state.json for task: {task_id}", 2)
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+def save_state(task_id, state):
+    with open(state_path(task_id), "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+        f.write("\n")
+
+def warroom_log(task_id, line):
+    with open(warroom_path(task_id), "a", encoding="utf-8") as f:
+        f.write(line if line.endswith("\n") else line + "\n")
+
+# ---------- init ----------
+
+def cmd_init(args):
+    d = eaos_dir()
+    for sub in ("decisions", "patterns", "lessons", "codebase"):
+        os.makedirs(os.path.join(d, "memory", sub), exist_ok=True)
+
+    index_path = os.path.join(d, "memory", "index.md")
+    seeded = "skipped"
+    if not os.path.isfile(index_path):
+        seed = os.path.expanduser("~/.claude/eaos/memory-seed/index.md")
+        if os.path.isfile(seed):
+            with open(seed, encoding="utf-8") as f:
+                content = f.read()
+            with open(index_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            seeded = "seeded"
+        else:
+            seeded = "no-seed-available"
+
+    cfg_status = "existing"
+    if not os.path.isfile(config_path()):
+        cfg = dict(DEFAULT_CONFIG)
+        if args.max_spawns is not None:
+            cfg["max_agent_spawns_per_task"] = args.max_spawns
+        if args.max_same_issue is not None:
+            cfg["max_same_issue_loops"] = args.max_same_issue
+        if args.max_total_loopbacks is not None:
+            cfg["max_total_loopbacks"] = args.max_total_loopbacks
+        with open(config_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        cfg_status = "created"
+
+    print(f"OK: eaos initialized (config: {cfg_status}, memory-index: {seeded})")
+    sys.exit(0)
+
+# ---------- task new ----------
+
+def allocate_task_id():
+    d = eaos_dir()
+    os.makedirs(d, exist_ok=True)
+    while True:
+        existing = [n for n in os.listdir(d) if re.match(r"^T-\d+$", n)]
+        nums = [int(n.split("-")[1]) for n in existing] or [0]
+        candidate = f"T-{max(nums) + 1:03d}"
+        path = os.path.join(d, candidate)
+        try:
+            os.makedirs(path)  # exclusive create — races lose here and retry
+            return candidate, path
+        except FileExistsError:
+            continue
+
+def cmd_task_new(args):
+    task_id, path = allocate_task_id()
+    os.makedirs(os.path.join(path, "artifacts"), exist_ok=True)
+    ts = now_iso()
+    with open(os.path.join(path, "warroom.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {task_id}: {args.title}\n\nCreated: {ts}\nStatus: active\n\n"
+                f"## War Room Log\n")
+    state = {
+        "id": task_id,
+        "title": args.title,
+        "created": ts,
+        "status": "active",
+        "phase": "INTAKE",
+        "phase_history": [{"phase": "INTAKE", "at": ts}],
+        "next_msg_num": 1,
+        "messages": [],
+        "spawns": {"count": 0, "log": []},
+        "loopbacks": {"total": 0, "by_issue": {}, "ledger": []},
+        "gates": {},
+        "criteria": {},
+    }
+    save_state(task_id, state)
+    print(task_id)
+    sys.exit(0)
+
+# ---------- append ----------
+
+def cmd_append(args):
+    state = load_state(args.id)
+    to_list = [t.strip() for t in args.to.split(",") if t.strip()]
+    msg_id = f"msg-{state['next_msg_num']:03d}"
+    ts = now_iso()
+    msg = {
+        "id": msg_id, "from": args.frm, "to": to_list, "type": args.type,
+        "ref": args.ref, "priority": args.priority, "body": args.body, "at": ts,
+    }
+    state["messages"].append(msg)
+    state["next_msg_num"] += 1
+    save_state(args.id, state)
+
+    block = [f"\n- id: {msg_id}", f"  from: {args.frm}", f"  to: [{', '.join(to_list)}]",
+              f"  type: {args.type}"]
+    if args.ref:
+        block.append(f"  ref: {args.ref}")
+    block.append(f"  priority: {args.priority}")
+    block.append("  body: >")
+    block.append(f"    {args.body}")
+    warroom_log(args.id, "\n".join(block) + "\n")
+
+    print(f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})")
+    sys.exit(0)
+
+# ---------- phase ----------
+
+def cmd_phase(args):
+    state = load_state(args.id)
+    old = state.get("phase")
+    ts = now_iso()
+    state["phase"] = args.phase
+    state["phase_history"].append({"phase": args.phase, "at": ts})
+    save_state(args.id, state)
+    warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}\n")
+    print(f"OK: phase {old} -> {args.phase}")
+    sys.exit(0)
+
+# ---------- spawn ----------
+
+def cmd_spawn(args):
+    cfg = load_config()
+    cap = cfg["max_agent_spawns_per_task"]
+    state = load_state(args.id)
+    ts = now_iso()
+    # Check BEFORE persisting: a rejected spawn never happened, so it must not consume a
+    # slot — otherwise one rejection would lock the budget out permanently.
+    if state["spawns"]["count"] + 1 > cap:
+        warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
+                              f"tally={state['spawns']['count']}/{cap} (over budget)")
+        print(f"BUDGET EXCEEDED: would be {state['spawns']['count'] + 1}/{cap} spawns — "
+              f"downgrade or drop an agent, or raise the cap consciously at init")
+        sys.exit(1)
+    state["spawns"]["count"] += 1
+    n = state["spawns"]["count"]
+    state["spawns"]["log"].append({"agent": args.agent, "at": ts})
+    save_state(args.id, state)
+    warroom_log(args.id, f"[{ts}] SPAWN agent={args.agent} tally={n}/{cap}")
+    print(f"OK: {n}/{cap} spawns")
+    sys.exit(0)
+
+# ---------- loopback ----------
+
+def cmd_loopback(args):
+    cfg = load_config()
+    max_same = cfg["max_same_issue_loops"]
+    max_total = cfg["max_total_loopbacks"]
+    state = load_state(args.id)
+    ts = now_iso()
+
+    lb = state["loopbacks"]
+    lb["total"] += 1
+    lb["by_issue"][args.issue] = lb["by_issue"].get(args.issue, 0) + 1
+    entry = {"edge": args.edge, "issue": args.issue, "attempt": args.attempt, "at": ts}
+    lb["ledger"].append(entry)
+    save_state(args.id, state)
+    warroom_log(args.id, f"[{ts}] LOOPBACK edge={args.edge} issue={args.issue} "
+                          f"attempt={args.attempt} "
+                          f"(same-issue {lb['by_issue'][args.issue]}/{max_same}, "
+                          f"total {lb['total']}/{max_total})")
+
+    same_n = lb["by_issue"][args.issue]
+    total_n = lb["total"]
+
+    def print_ledger(entries):
+        for e in entries:
+            print(f"  - [{e['at']}] edge={e['edge']} issue={e['issue']}: {e['attempt']}")
+
+    if same_n > max_same:
+        print(f"DEADLOCK: issue '{args.issue}' looped {same_n} times — escalate to the "
+              f"human with the attempt ledger")
+        print_ledger([e for e in lb["ledger"] if e["issue"] == args.issue])
+        sys.exit(1)
+
+    if total_n > max_total:
+        print(f"CEILING: {total_n} total loop-backs — halt, hand the human the attempt "
+              f"ledger + best current state")
+        print_ledger(lb["ledger"])
+        sys.exit(1)
+
+    print(f"OK: {same_n}/{max_same} same-issue, {total_n}/{max_total} total loop-backs "
+          f"remaining allowance {max_same - same_n}/{max_total - total_n}")
+    sys.exit(0)
+
+# ---------- gate ----------
+
+def cmd_gate(args):
+    state = load_state(args.id)
+    gates = state.setdefault("gates", {})
+    phase_gates = gates.setdefault(args.phase, {})
+
+    if args.require:
+        if not phase_gates:
+            print(f"GATE UNMET: {args.phase} — no checks recorded for this phase")
+            sys.exit(1)
+        failed = [name for name, r in phase_gates.items() if r["result"] != "pass"]
+        if failed:
+            print(f"GATE UNMET: {args.phase} — failed checks: {', '.join(failed)}")
+            sys.exit(1)
+        print(f"OK: {args.phase} gate satisfied ({len(phase_gates)} checks pass)")
+        sys.exit(0)
+
+    if not args.check or (args.passed == args.failed):  # neither or both given
+        die("gate: need --check NAME with exactly one of --pass/--fail, or --require", 2)
+
+    ts = now_iso()
+    result = "pass" if args.passed else "fail"
+    phase_gates[args.check] = {"result": result, "note": args.note, "at": ts}
+    save_state(args.id, state)
+    warroom_log(args.id, f"[{ts}] GATE phase={args.phase} check={args.check} "
+                          f"result={result} note={args.note or ''}")
+    print(f"OK: {args.phase}/{args.check} = {result}")
+    sys.exit(0)
+
+# ---------- verify ----------
+
+def require_status(state):
+    criteria = state.get("criteria", {})
+    if not criteria:
+        return False, "zero criteria recorded"
+    failed = [k for k, v in criteria.items() if v["verdict"] != "pass"]
+    if failed:
+        return False, f"failed criteria: {', '.join(failed)}"
+    return True, None
+
+def print_criteria_table(state):
+    criteria = state.get("criteria", {})
+    print("| Criterion | Verdict | Evidence |")
+    print("|---|---|---|")
+    for k, v in criteria.items():
+        print(f"| {k} | {v['verdict']} | {v['evidence']} |")
+
+def cmd_verify(args):
+    state = load_state(args.id)
+
+    if args.require:
+        ok, reason = require_status(state)
+        print_criteria_table(state)
+        if not ok:
+            print(f"UNVERIFIED: {reason}")
+            sys.exit(1)
+        print("OK: all recorded criteria pass")
+        sys.exit(0)
+
+    if not args.criterion or not args.verdict:
+        die("verify: need --criterion NAME --verdict pass|fail --evidence '...', "
+            "or --require", 2)
+    if not args.evidence:
+        die("verify: --evidence is mandatory with --verdict (an unevidenced pass is "
+            "exactly the fantasy this tool exists to kill)", 2)
+
+    ts = now_iso()
+    state.setdefault("criteria", {})[args.criterion] = {
+        "verdict": args.verdict, "evidence": args.evidence, "at": ts,
+    }
+    save_state(args.id, state)
+    warroom_log(args.id, f"[{ts}] VERIFY criterion={args.criterion} "
+                          f"verdict={args.verdict} evidence={args.evidence}")
+    print(f"OK: {args.criterion} = {args.verdict}")
+    sys.exit(0)
+
+# ---------- status ----------
+
+def cmd_status(args):
+    state = load_state(args.id)
+    cfg_path = config_path()
+    cfg = json.load(open(cfg_path, encoding="utf-8")) if os.path.isfile(cfg_path) \
+        else DEFAULT_CONFIG
+
+    print(f"Task: {state['id']} — {state['title']}")
+    print(f"Status: {state['status']}   Phase: {state['phase']}")
+    history = " -> ".join(h["phase"] for h in state["phase_history"])
+    print(f"Phase history: {history}")
+
+    spawns = state["spawns"]
+    print(f"Spawns: {spawns['count']}/{cfg['max_agent_spawns_per_task']}")
+
+    lb = state["loopbacks"]
+    print(f"Loopbacks: total {lb['total']}/{cfg['max_total_loopbacks']}; "
+          f"by issue: {lb['by_issue']}")
+
+    print("Gates:")
+    if not state.get("gates"):
+        print("  (none recorded)")
+    for phase, checks in state.get("gates", {}).items():
+        for name, r in checks.items():
+            print(f"  {phase}/{name}: {r['result']}")
+
+    print("Criteria:")
+    if state.get("criteria"):
+        print_criteria_table(state)
+    else:
+        print("  (none recorded)")
+
+    print("Last 5 war-room messages:")
+    for m in state["messages"][-5:]:
+        print(f"  {m['id']} [{m['type']}] {m['from']} -> {', '.join(m['to'])}: {m['body']}")
+    sys.exit(0)
+
+# ---------- report ----------
+
+def cmd_report(args):
+    state = load_state(args.id)
+    ok, reason = require_status(state)
+    if not ok:
+        print(f"REFUSED: verify --require not satisfied — {reason}")
+        sys.exit(1)
+
+    d = task_dir(args.id)
+    artifacts_dir = os.path.join(d, "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+    out_path = os.path.join(artifacts_dir, "final-report.md")
+
+    lines = [f"# Final report skeleton — {state['id']}: {state['title']}", ""]
+
+    lines.append("## Phase history")
+    for h in state["phase_history"]:
+        lines.append(f"- {h['phase']} ({h['at']})")
+    lines.append("")
+
+    lines.append("## Decisions")
+    decisions = [m for m in state["messages"] if m["type"] == "DECISION"]
+    if decisions:
+        for m in decisions:
+            lines.append(f"- [{m['id']}] {m['from']}: {m['body']}")
+    else:
+        lines.append("(none recorded)")
+    lines.append("")
+
+    lines.append("## Criteria (DoD table)")
+    lines.append("| Criterion | Verdict | Evidence |")
+    lines.append("|---|---|---|")
+    for k, v in state.get("criteria", {}).items():
+        lines.append(f"| {k} | {v['verdict']} | {v['evidence']} |")
+    lines.append("")
+
+    ledger = state["loopbacks"]["ledger"]
+    if ledger:
+        lines.append("## Attempt ledger")
+        for e in ledger:
+            lines.append(f"- issue={e['issue']} edge={e['edge']}: {e['attempt']}")
+        lines.append("")
+
+    lines.append("## Artifacts")
+    for name in sorted(os.listdir(artifacts_dir)):
+        if name != "final-report.md":
+            lines.append(f"- artifacts/{name}")
+    lines.append("")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"OK: report skeleton written to {out_path}")
+    sys.exit(0)
+
+# ---------- argparse wiring ----------
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="eaos")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    p_init = sub.add_parser("init")
+    p_init.add_argument("--max-spawns", type=int, default=None)
+    p_init.add_argument("--max-same-issue", type=int, default=None)
+    p_init.add_argument("--max-total-loopbacks", type=int, default=None)
+    p_init.set_defaults(func=cmd_init)
+
+    p_task = sub.add_parser("task")
+    task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
+    p_task_new = task_sub.add_parser("new")
+    p_task_new.add_argument("title")
+    p_task_new.set_defaults(func=cmd_task_new)
+
+    p_append = sub.add_parser("append")
+    p_append.add_argument("id")
+    p_append.add_argument("--from", dest="frm", required=True)
+    p_append.add_argument("--to", required=True)
+    p_append.add_argument("--type", required=True, choices=MSG_TYPES)
+    p_append.add_argument("--body", required=True)
+    p_append.add_argument("--ref", default=None)
+    p_append.add_argument("--priority", default="normal")
+    p_append.set_defaults(func=cmd_append)
+
+    p_phase = sub.add_parser("phase")
+    p_phase.add_argument("id")
+    p_phase.add_argument("phase")
+    p_phase.set_defaults(func=cmd_phase)
+
+    p_spawn = sub.add_parser("spawn")
+    p_spawn.add_argument("id")
+    p_spawn.add_argument("--agent", required=True)
+    p_spawn.set_defaults(func=cmd_spawn)
+
+    p_loop = sub.add_parser("loopback")
+    p_loop.add_argument("id")
+    p_loop.add_argument("--edge", required=True)
+    p_loop.add_argument("--issue", required=True)
+    p_loop.add_argument("--attempt", required=True)
+    p_loop.set_defaults(func=cmd_loopback)
+
+    p_gate = sub.add_parser("gate")
+    p_gate.add_argument("id")
+    p_gate.add_argument("phase")
+    p_gate.add_argument("--check", default=None)
+    p_gate.add_argument("--pass", dest="passed", action="store_true")
+    p_gate.add_argument("--fail", dest="failed", action="store_true")
+    p_gate.add_argument("--note", default=None)
+    p_gate.add_argument("--require", action="store_true")
+    p_gate.set_defaults(func=cmd_gate)
+
+    p_verify = sub.add_parser("verify")
+    p_verify.add_argument("id")
+    p_verify.add_argument("--criterion", default=None)
+    p_verify.add_argument("--verdict", choices=["pass", "fail"], default=None)
+    p_verify.add_argument("--evidence", default=None)
+    p_verify.add_argument("--require", action="store_true")
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_status = sub.add_parser("status")
+    p_status.add_argument("id")
+    p_status.set_defaults(func=cmd_status)
+
+    p_report = sub.add_parser("report")
+    p_report.add_argument("id")
+    p_report.set_defaults(func=cmd_report)
+
+    return p
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.cmd == "task" and args.task_cmd != "new":
+        die("usage: eaos task new \"<title>\"", 2)
+    try:
+        args.func(args)
+    except SystemExit:
+        raise
+    except Exception as e:  # unexpected bug, not a defined ceiling/gate outcome
+        die(f"ERROR: {e}", 2)
+
+if __name__ == "__main__":
+    main()

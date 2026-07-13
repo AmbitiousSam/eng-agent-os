@@ -157,9 +157,8 @@ models:
 # ---- Efficiency guards ----
 budget:
   # Token-level budgeting is unenforceable here — the model cannot measure its own token usage.
-  # Use a countable proxy instead: cap on agent spawns. True token-level budgeting needs the
-  # future `eaos` runtime CLI (ROADMAP backlog #1) to meter and enforce; until it exists, this
-  # is the guard.
+  # Use a countable proxy instead: cap on agent spawns. Enforced by the eaos CLI when present
+  # (config.json mirrors these values at `eaos init`); prompt-enforced otherwise.
   max_agent_spawns_per_task: 12
   on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value]
 parallelism:
@@ -173,6 +172,8 @@ parallelism:
     complex:  full          # fan out wherever the fan_out_test passes
   never: "two agents editing the same files, or fan-out on work smaller than its coordination cost"
   isolation: "for complex full fan-out, spawn writing subagents with worktree isolation when the harness supports it (each gets its own checkout); readers never need it"
+# Enforced by the eaos CLI when present (config.json mirrors these values at `eaos init`);
+# prompt-enforced otherwise.
 loop_guard:
   max_same_issue_loops: 3   # then escalate deadlock to human
   retry_must_vary: true     # a retry MUST change approach vs the previous attempt. "Same

@@ -31,7 +31,8 @@ install_file() {
 }
 
 mkdir -p "$AGENTS_DIR" "$SKILLS_DIR" "$COMMANDS_DIR" \
-         "$CONFIG_DIR/templates" "$CONFIG_DIR/playbooks" "$CONFIG_DIR/memory-seed" "$EAOS_DIR/vendor"
+         "$CONFIG_DIR/templates" "$CONFIG_DIR/playbooks" "$CONFIG_DIR/memory-seed" \
+         "$CONFIG_DIR/bin" "$EAOS_DIR/vendor"
 
 # 1) Clone or update agency-agents (the persona library EAOS builds on), pinned to AGENCY_SHA.
 if [ -d "$VENDOR_DIR/.git" ]; then
@@ -90,6 +91,12 @@ for f in "$EAOS_DIR"/playbooks/*.md; do
   [ -e "$f" ] || continue
   install_file "$f" "$CONFIG_DIR/playbooks/$(basename "$f")"
 done
+
+# 5a) Install the eaos runtime CLI (mechanical bookkeeping — task ids, war-room appends, loop
+#     ceilings, spawn budget, gates, DoD verification; see docs/reviews/2026-07-13-eaos-cli-spec.md).
+say "Installing eaos runtime CLI -> $CONFIG_DIR/bin"
+install_file "$EAOS_DIR/scripts/eaos" "$CONFIG_DIR/bin/eaos"
+chmod +x "$CONFIG_DIR/bin/eaos"
 
 # 5b) Seed the memory index so a fresh project has something to copy on its first run
 #     (memory/README.md: index.md is "always loaded" — the command's Step 0 seeds from here).

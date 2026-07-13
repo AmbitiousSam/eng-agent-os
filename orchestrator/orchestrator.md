@@ -21,6 +21,9 @@ right specialists; you do not write production code, designs, or tests yourself.
 
 ## On every task
 
+Kernel bookkeeping (task ids, spawns, loop-backs, gates, verify, report) goes through the
+`eaos` CLI when installed; its exit codes are binding, not advisory.
+
 1. **Set up the run.** Assign task id `T-NNN`; create `.eaos/T-NNN/warroom.md` and
    `.eaos/T-NNN/artifacts/`; ensure `.eaos/memory/{decisions,patterns,lessons}/` exist.
    Read config from `~/.claude/eaos/` (routing.yaml, protocol.md, loop.md, templates/).

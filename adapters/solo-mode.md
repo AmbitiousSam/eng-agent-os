@@ -76,3 +76,13 @@ subagents at all — it depends on you, the human, opening a second window:
 This single move — a genuinely fresh context with no authoring memory — is what maker≠checker
 actually requires. It costs one extra conversation, not a fleet of simulated personas, and it
 works in every chat tool that exists.
+
+## The eaos CLI works here too
+
+Solo users can (and should) use `eaos verify` and `eaos report` for the DoD table from step 5
+above — it's plain stdlib python (`scripts/eaos` in an eng-agent-os checkout, or
+`~/.claude/eaos/bin/eaos` once installed), so it works in any tool, subagents or not. Record
+each acceptance criterion with `eaos verify <id> --criterion "AC-1" --verdict pass|fail
+--evidence "..."`, then run `eaos verify <id> --require` before calling the task done. `eaos
+report <id>` refuses to assemble the final report if that fails — the same protection against
+an unevidenced "pass" that the fresh-session trick gives you against an uncheckable one.
