@@ -122,3 +122,15 @@ mechanisms:
     owner: skills/triage
     evaluation_due_after_runs: 3
     removal_condition: coverage no better than un-manifested triage across eval runs
+
+  - id: M-010
+    name: stakes-proportional-lifecycle
+    reliability: process
+    status: proposed
+    motivating_evidence: [eval run 2 (evals/results/2026-09-01-run2.md) — 14.4x input tokens on a toy build; defect yield concentrated in security review + verifier while launch-review/ops/docs/narration yielded none]
+    expected_effect: lifecycle phases scale with stakes (deploy-bound? money-path? users?) so ceremony cost tracks defect-catching value
+    primary_metric: tokens_per_caught_defect
+    guardrails: [defects_caught_per_task, claim_honesty]
+    owner: routing
+    evaluation_due_after_runs: 5
+    removal_condition: no cost reduction without quality loss across build-class eval runs
