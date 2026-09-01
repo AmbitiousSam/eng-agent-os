@@ -328,6 +328,7 @@ def cmd_task_new(args):
             "id": task_id,
             "title": args.title,
             "kind": args.kind,
+            "stakes": args.stakes,
             "playbook": args.playbook,
             "parent": args.parent,
             "fingerprint": fp,
@@ -875,6 +876,7 @@ def cmd_episode_close(args):
                 "task": args.id,
                 "title": state.get("title"),
                 "kind": state.get("kind"),
+                "stakes": state.get("stakes"),
                 "playbook": state.get("playbook"),
                 "created": created,
                 "closed": ts,
@@ -1031,6 +1033,8 @@ def build_parser():
     p_task_new = task_sub.add_parser("new")
     p_task_new.add_argument("title")
     p_task_new.add_argument("--kind", default=None)
+    p_task_new.add_argument("--stakes", default=None,
+                            choices=["toy", "internal", "production"])
     p_task_new.add_argument("--playbook", default=None)
     p_task_new.add_argument("--parent", default=None)
     p_task_new.add_argument("--allow-duplicate", action="store_true", dest="allow_duplicate")
