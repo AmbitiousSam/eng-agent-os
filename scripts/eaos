@@ -9,14 +9,23 @@ State lives under ./.eaos/ in the target project (cwd). Two files per task:
   state.json   — machine state: source of truth for every command below
 
 Exit codes: 0 = allowed/ok, 1 = ceiling hit / gate unmet / invalid, 2 = usage error.
-stdlib only (json/argparse/os/re/datetime). No third-party deps, ever.
+stdlib only (json/argparse/os/re/datetime/hashlib/time/contextlib). No third-party
+deps, ever.
+
+Consistency layer (spec §11): state.json carries schema_version + revision; mutating
+verbs serialize through a per-task lock (.eaos/<id>/.lock) or, when a mutation touches
+project-wide state (config.json, runs.jsonl, or a cross-task spawn-budget scan), a
+project lock (.eaos/.lock) — always acquired before any task lock to avoid deadlock.
 """
 import argparse
+import contextlib
 import datetime
+import hashlib
 import json
 import os
 import re
 import sys
+import time
 
 MSG_TYPES = ["PROPOSE", "QUESTION", "CHALLENGE", "REVIEW", "RISK", "DECISION", "HANDOFF",
              "STATUS", "VERDICT"]
@@ -25,6 +34,21 @@ DEFAULT_CONFIG = {
     "max_total_loopbacks": 8,
     "max_agent_spawns_per_task": 12,
 }
+
+STATE_SCHEMA_VERSION = 2
+IDEMPOTENCY_KEEP = 200
+
+VERIFY_VERDICTS = ("pass", "fail", "blocked", "not_reproducible",
+                    "manual_confirmation_required")
+# Criterion states beyond pass/fail: honest deferral rather than a fantasy pass
+# (spec §11; evidence: T17-09 AC2). These never block --require, only mark it conditional.
+CONDITIONAL_VERDICTS = ("blocked", "not_reproducible", "manual_confirmation_required")
+
+LOOPBACK_CLASSES = ("recoverable", "transient", "hard_blocker")
+
+LOCK_STALE_SECONDS = 60
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_POLL_SECONDS = 0.05
 
 # ---------- small io helpers ----------
 
@@ -60,16 +84,30 @@ def state_path(task_id):
 def warroom_path(task_id):
     return os.path.join(task_dir(task_id), "warroom.md")
 
+def migrate_state(state):
+    """Tolerate a pre-v2 state.json: fill missing fields in-memory. The bump to
+    schema_version 2 is only committed to disk on the next save_state() call."""
+    if state.get("schema_version", 1) < 2:
+        state.setdefault("revision", 0)
+        state.setdefault("parent", None)
+        state.setdefault("fingerprint", None)
+        state.setdefault("idempotency_keys", [])
+        state["schema_version"] = 2
+    return state
+
 def load_state(task_id):
     p = state_path(task_id)
     if not os.path.isfile(p):
         die(f"no state.json for task: {task_id}", 2)
     with open(p, encoding="utf-8") as f:
-        return json.load(f)
+        state = json.load(f)
+    return migrate_state(state)
 
 def save_state(task_id, state):
     # atomic: write to a sibling temp file, then rename over the real one — a crash
     # mid-write leaves the previous-valid state.json, never a partial/corrupt one.
+    state["schema_version"] = STATE_SCHEMA_VERSION
+    state["revision"] = state.get("revision", 0) + 1
     p = state_path(task_id)
     tmp = f"{p}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -80,6 +118,13 @@ def save_state(task_id, state):
 def warroom_log(task_id, line):
     with open(warroom_path(task_id), "a", encoding="utf-8") as f:
         f.write(line if line.endswith("\n") else line + "\n")
+
+def read_warroom_text(task_id):
+    p = warroom_path(task_id)
+    if not os.path.isfile(p):
+        return ""
+    with open(p, encoding="utf-8") as f:
+        return f.read()
 
 def runs_path():
     return os.path.join(eaos_dir(), "runs.jsonl")
@@ -102,6 +147,87 @@ def read_episode_lines_for_task(task_id):
                 lines.append(obj)
     return lines
 
+# ---------- locking ----------
+# Per-task lock: .eaos/<id>/.lock — guards state.json + warroom.md for that task.
+# Project lock: .eaos/.lock — guards config.json, runs.jsonl, and any cross-task scan
+# (parent-tree spawn budget, duplicate fingerprint lookup). When both are needed the
+# project lock is always acquired first, so lock order is consistent everywhere and
+# concurrent callers can never deadlock against each other.
+
+def _acquire_lock(path):
+    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, str(os.getpid()).encode("utf-8"))
+            finally:
+                os.close(fd)
+            return
+        except FileExistsError:
+            pass
+        try:
+            age = time.time() - os.path.getmtime(path)
+        except OSError:
+            continue  # lock vanished between the open() and stat() — just retry
+        if age > LOCK_STALE_SECONDS:
+            print(f"WARN: stale lock {path} (age {age:.0f}s) — stealing", file=sys.stderr)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        if time.monotonic() >= deadline:
+            die(f"lock busy: {path} — another eaos process is mutating this state, "
+                f"retry shortly", 1)
+        time.sleep(LOCK_POLL_SECONDS)
+
+def _release_lock(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+@contextlib.contextmanager
+def task_lock(task_id):
+    p = os.path.join(task_dir(task_id), ".lock")
+    _acquire_lock(p)
+    try:
+        yield
+    finally:
+        _release_lock(p)
+
+@contextlib.contextmanager
+def project_lock():
+    os.makedirs(eaos_dir(), exist_ok=True)
+    p = os.path.join(eaos_dir(), ".lock")
+    _acquire_lock(p)
+    try:
+        yield
+    finally:
+        _release_lock(p)
+
+# ---------- idempotency ----------
+# Only successful (exit-0) mutations are cached: a rejected/ceiling-hit call never
+# touched state, so replaying it with the same args is already naturally idempotent —
+# no key bookkeeping needed for the failure paths.
+
+def idempotency_lookup(state, key):
+    if not key:
+        return None
+    for entry in state.get("idempotency_keys", []):
+        if entry.get("key") == key:
+            return entry
+    return None
+
+def idempotency_record(state, key, output):
+    if not key:
+        return
+    keys = state.setdefault("idempotency_keys", [])
+    keys.append({"key": key, "output": output})
+    if len(keys) > IDEMPOTENCY_KEEP:
+        del keys[: len(keys) - IDEMPOTENCY_KEEP]
+
 # ---------- init ----------
 
 def cmd_init(args):
@@ -123,18 +249,19 @@ def cmd_init(args):
             seeded = "no-seed-available"
 
     cfg_status = "existing"
-    if not os.path.isfile(config_path()):
-        cfg = dict(DEFAULT_CONFIG)
-        if args.max_spawns is not None:
-            cfg["max_agent_spawns_per_task"] = args.max_spawns
-        if args.max_same_issue is not None:
-            cfg["max_same_issue_loops"] = args.max_same_issue
-        if args.max_total_loopbacks is not None:
-            cfg["max_total_loopbacks"] = args.max_total_loopbacks
-        with open(config_path(), "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
-            f.write("\n")
-        cfg_status = "created"
+    with project_lock():
+        if not os.path.isfile(config_path()):
+            cfg = dict(DEFAULT_CONFIG)
+            if args.max_spawns is not None:
+                cfg["max_agent_spawns_per_task"] = args.max_spawns
+            if args.max_same_issue is not None:
+                cfg["max_same_issue_loops"] = args.max_same_issue
+            if args.max_total_loopbacks is not None:
+                cfg["max_total_loopbacks"] = args.max_total_loopbacks
+            with open(config_path(), "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            cfg_status = "created"
 
     print(f"OK: eaos initialized (config: {cfg_status}, memory-index: {seeded})")
     sys.exit(0)
@@ -155,147 +282,298 @@ def allocate_task_id():
         except FileExistsError:
             continue
 
+def all_task_ids():
+    d = eaos_dir()
+    if not os.path.isdir(d):
+        return []
+    return sorted(n for n in os.listdir(d) if re.match(r"^T-\d+$", n))
+
+def compute_fingerprint(parent, title):
+    tokens = sorted(re.findall(r"\w+", title.lower()))
+    normalized = (parent or "") + "|" + " ".join(tokens)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+def find_duplicate_task(fingerprint):
+    for tid in all_task_ids():
+        try:
+            st = load_state(tid)
+        except SystemExit:
+            continue
+        if st.get("fingerprint") == fingerprint and st.get("status") != "closed":
+            return tid
+    return None
+
 def cmd_task_new(args):
-    task_id, path = allocate_task_id()
-    os.makedirs(os.path.join(path, "artifacts"), exist_ok=True)
-    ts = now_iso()
-    with open(os.path.join(path, "warroom.md"), "w", encoding="utf-8") as f:
-        f.write(f"# {task_id}: {args.title}\n\nCreated: {ts}\nStatus: active\n\n"
-                f"## War Room Log\n")
-    state = {
-        "id": task_id,
-        "title": args.title,
-        "kind": args.kind,
-        "playbook": args.playbook,
-        "created": ts,
-        "status": "active",
-        "phase": "INTAKE",
-        "phase_history": [{"phase": "INTAKE", "at": ts}],
-        "next_msg_num": 1,
-        "messages": [],
-        "spawns": {"count": 0, "log": []},
-        "loopbacks": {"total": 0, "by_issue": {}, "ledger": []},
-        "gates": {},
-        "criteria": {},
-    }
-    save_state(task_id, state)
+    if args.parent:
+        task_dir(args.parent)  # validates existence; dies with usage error if missing
+    if args.allow_duplicate and not args.reason:
+        die("task new: --allow-duplicate requires --reason", 2)
+
+    fp = compute_fingerprint(args.parent, args.title)
+
+    with project_lock():
+        if not args.allow_duplicate:
+            dup = find_duplicate_task(fp)
+            if dup:
+                die(f"DUPLICATE: fingerprint matches {dup} — resume it instead (or pass "
+                    f"--allow-duplicate --reason '<why>')", 1)
+
+        task_id, path = allocate_task_id()
+        os.makedirs(os.path.join(path, "artifacts"), exist_ok=True)
+        ts = now_iso()
+        with open(os.path.join(path, "warroom.md"), "w", encoding="utf-8") as f:
+            f.write(f"# {task_id}: {args.title}\n\nCreated: {ts}\nStatus: active\n\n"
+                    f"## War Room Log\n")
+        state = {
+            "id": task_id,
+            "title": args.title,
+            "kind": args.kind,
+            "playbook": args.playbook,
+            "parent": args.parent,
+            "fingerprint": fp,
+            "created": ts,
+            "status": "active",
+            "phase": "INTAKE",
+            "phase_history": [{"phase": "INTAKE", "at": ts}],
+            "next_msg_num": 1,
+            "messages": [],
+            "spawns": {"count": 0, "log": []},
+            "loopbacks": {"total": 0, "by_issue": {}, "ledger": []},
+            "gates": {},
+            "criteria": {},
+            "idempotency_keys": [],
+        }
+        if args.allow_duplicate and args.reason:
+            state["duplicate_override_reason"] = args.reason
+        save_state(task_id, state)
     print(task_id)
     sys.exit(0)
 
 # ---------- append ----------
 
 def cmd_append(args):
-    state = load_state(args.id)
-    to_list = [t.strip() for t in args.to.split(",") if t.strip()]
-    msg_id = f"msg-{state['next_msg_num']:03d}"
-    ts = now_iso()
-    msg = {
-        "id": msg_id, "from": args.frm, "to": to_list, "type": args.type,
-        "ref": args.ref, "priority": args.priority, "body": args.body, "at": ts,
-    }
-    state["messages"].append(msg)
-    state["next_msg_num"] += 1
-    save_state(args.id, state)
+    if (args.body is None) == (args.file is None):
+        die("append: need exactly one of --body or --file", 2)
+    if args.file is not None:
+        if args.file == "-":
+            body_text = sys.stdin.read()
+        else:
+            with open(args.file, encoding="utf-8") as f:
+                body_text = f.read()
+    else:
+        body_text = args.body
+    body_text = body_text.rstrip("\n")
 
-    block = [f"\n- id: {msg_id}", f"  from: {args.frm}", f"  to: [{', '.join(to_list)}]",
-              f"  type: {args.type}"]
-    if args.ref:
-        block.append(f"  ref: {args.ref}")
-    block.append(f"  priority: {args.priority}")
-    block.append("  body: >")
-    block.append(f"    {args.body}")
-    warroom_log(args.id, "\n".join(block) + "\n")
+    with task_lock(args.id):
+        state = load_state(args.id)
+        cached = idempotency_lookup(state, args.idempotency_key)
+        if cached:
+            print(cached["output"])
+            sys.exit(0)
 
-    print(f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})")
+        to_list = [t.strip() for t in args.to.split(",") if t.strip()]
+        msg_id = f"msg-{state['next_msg_num']:03d}"
+        ts = now_iso()
+        msg = {
+            "id": msg_id, "from": args.frm, "to": to_list, "type": args.type,
+            "ref": args.ref, "priority": args.priority, "body": body_text, "at": ts,
+        }
+        state["messages"].append(msg)
+        state["next_msg_num"] += 1
+
+        out = f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})"
+        idempotency_record(state, args.idempotency_key, out)
+        save_state(args.id, state)
+
+        block = [f"\n- id: {msg_id}", f"  from: {args.frm}", f"  to: [{', '.join(to_list)}]",
+                  f"  type: {args.type}"]
+        if args.ref:
+            block.append(f"  ref: {args.ref}")
+        block.append(f"  priority: {args.priority}")
+        block.append("  body: >")
+        for line in body_text.splitlines() or [""]:
+            block.append(f"    {line}")
+        warroom_log(args.id, "\n".join(block) + "\n")
+
+    print(out)
     sys.exit(0)
 
 # ---------- phase ----------
 
 def cmd_phase(args):
-    state = load_state(args.id)
-    old = state.get("phase")
-    ts = now_iso()
-    state["phase"] = args.phase
-    state["phase_history"].append({"phase": args.phase, "at": ts})
-    save_state(args.id, state)
-    warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}\n")
-    print(f"OK: phase {old} -> {args.phase}")
+    with task_lock(args.id):
+        state = load_state(args.id)
+        cached = idempotency_lookup(state, args.idempotency_key)
+        if cached:
+            print(cached["output"])
+            sys.exit(0)
+
+        old = state.get("phase")
+        ts = now_iso()
+        state["phase"] = args.phase
+        state["phase_history"].append({"phase": args.phase, "at": ts})
+        out = f"OK: phase {old} -> {args.phase}"
+        idempotency_record(state, args.idempotency_key, out)
+        save_state(args.id, state)
+        warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}\n")
+    print(out)
     sys.exit(0)
 
 # ---------- spawn ----------
 
+def find_root(task_id, seen=None):
+    seen = seen if seen is not None else set()
+    if task_id in seen:
+        return task_id  # cycle guard — should never happen, but never loop forever
+    seen.add(task_id)
+    parent = load_state(task_id).get("parent")
+    if not parent:
+        return task_id
+    return find_root(parent, seen)
+
+def tree_task_ids(root_id):
+    ids = all_task_ids()
+    parent_map = {}
+    for tid in ids:
+        try:
+            parent_map[tid] = load_state(tid).get("parent")
+        except SystemExit:
+            continue
+    tree = set()
+    def add(tid):
+        if tid in tree:
+            return
+        tree.add(tid)
+        for child, par in parent_map.items():
+            if par == tid:
+                add(child)
+    add(root_id)
+    return tree
+
+def tree_spawn_total(task_id):
+    """Sum spawns.count across the whole ancestry tree (root + all descendants). Caller
+    must already hold the project lock so this scan-then-decide is atomic."""
+    root = find_root(task_id)
+    tree = tree_task_ids(root)
+    total = sum(load_state(tid).get("spawns", {}).get("count", 0) for tid in tree)
+    return total, root
+
 def cmd_spawn(args):
     cfg = load_config()
     cap = cfg["max_agent_spawns_per_task"]
-    state = load_state(args.id)
-    ts = now_iso()
-    # Check BEFORE persisting: a rejected spawn never happened, so it must not consume a
-    # slot — otherwise one rejection would lock the budget out permanently.
-    if state["spawns"]["count"] + 1 > cap:
-        warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
-                              f"tally={state['spawns']['count']}/{cap} (over budget)")
-        print(f"BUDGET EXCEEDED: would be {state['spawns']['count'] + 1}/{cap} spawns — "
-              f"downgrade or drop an agent, or raise the cap consciously at init")
-        sys.exit(1)
-    state["spawns"]["count"] += 1
-    n = state["spawns"]["count"]
-    state["spawns"]["log"].append({"agent": args.agent, "at": ts})
-    save_state(args.id, state)
-    warroom_log(args.id, f"[{ts}] SPAWN agent={args.agent} tally={n}/{cap}")
-    print(f"OK: {n}/{cap} spawns")
+    with project_lock():
+        with task_lock(args.id):
+            state = load_state(args.id)
+            cached = idempotency_lookup(state, args.idempotency_key)
+            if cached:
+                print(cached["output"])
+                sys.exit(0)
+
+            # Check BEFORE persisting: a rejected spawn never happened, so it must not
+            # consume a slot — otherwise one rejection would lock the budget out
+            # permanently.
+            total, root = tree_spawn_total(args.id)
+            ts = now_iso()
+            if total + 1 > cap:
+                warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
+                                      f"tree_total={total}/{cap} root={root} (over budget)")
+                print(f"BUDGET EXCEEDED: tree total would be {total + 1}/{cap} spawns "
+                      f"(root {root}) — downgrade or drop an agent, or raise the cap "
+                      f"consciously at init")
+                sys.exit(1)
+
+            state["spawns"]["count"] += 1
+            n = state["spawns"]["count"]
+            state["spawns"]["log"].append({"agent": args.agent, "at": ts})
+            out = f"OK: {n}/{cap} spawns (tree total {total + 1}/{cap}, root {root})"
+            idempotency_record(state, args.idempotency_key, out)
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] SPAWN agent={args.agent} tally={n}/{cap} "
+                                  f"tree_total={total + 1}/{cap}")
+    print(out)
     sys.exit(0)
 
 # ---------- loopback ----------
+
+def print_ledger(entries):
+    for e in entries:
+        print(f"  - [{e['at']}] edge={e['edge']} issue={e['issue']}: {e['attempt']}")
 
 def cmd_loopback(args):
     cfg = load_config()
     max_same = cfg["max_same_issue_loops"]
     max_total = cfg["max_total_loopbacks"]
-    state = load_state(args.id)
-    ts = now_iso()
+    lb_class = args.klass or "recoverable"
 
-    lb = state["loopbacks"]
-    lb["total"] += 1
-    lb["by_issue"][args.issue] = lb["by_issue"].get(args.issue, 0) + 1
-    entry = {"edge": args.edge, "issue": args.issue, "attempt": args.attempt, "at": ts}
-    lb["ledger"].append(entry)
-    save_state(args.id, state)
-    warroom_log(args.id, f"[{ts}] LOOPBACK edge={args.edge} issue={args.issue} "
-                          f"attempt={args.attempt} "
-                          f"(same-issue {lb['by_issue'][args.issue]}/{max_same}, "
-                          f"total {lb['total']}/{max_total})")
+    with task_lock(args.id):
+        state = load_state(args.id)
+        cached = idempotency_lookup(state, args.idempotency_key)
+        if cached:
+            print(cached["output"])
+            sys.exit(0)
 
-    same_n = lb["by_issue"][args.issue]
-    total_n = lb["total"]
+        lb = state["loopbacks"]
 
-    def print_ledger(entries):
-        for e in entries:
-            print(f"  - [{e['at']}] edge={e['edge']} issue={e['issue']}: {e['attempt']}")
+        if lb_class == "recoverable":
+            prior = [e for e in lb["ledger"] if e["issue"] == args.issue]
+            if prior and prior[-1]["attempt"] == args.attempt:
+                # Rejected before touching counters — same reasoning as spawn's
+                # check-before-persist: a rejected retry never happened.
+                print(f"REJECTED: retry must vary — attempt text identical to the "
+                      f"previous attempt for issue '{args.issue}'")
+                sys.exit(1)
 
-    if same_n > max_same:
-        print(f"DEADLOCK: issue '{args.issue}' looped {same_n} times — escalate to the "
-              f"human with the attempt ledger")
-        print_ledger([e for e in lb["ledger"] if e["issue"] == args.issue])
-        sys.exit(1)
+        ts = now_iso()
+        lb["total"] += 1
+        lb["by_issue"][args.issue] = lb["by_issue"].get(args.issue, 0) + 1
+        entry = {"edge": args.edge, "issue": args.issue, "attempt": args.attempt,
+                  "class": lb_class, "at": ts}
+        lb["ledger"].append(entry)
 
-    if total_n > max_total:
-        print(f"CEILING: {total_n} total loop-backs — halt, hand the human the attempt "
-              f"ledger + best current state")
-        print_ledger(lb["ledger"])
-        sys.exit(1)
+        same_n = lb["by_issue"][args.issue]
+        total_n = lb["total"]
 
-    print(f"OK: {same_n}/{max_same} same-issue, {total_n}/{max_total} total loop-backs "
-          f"remaining allowance {max_same - same_n}/{max_total - total_n}")
+        if lb_class == "hard_blocker":
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] LOOPBACK edge={args.edge} issue={args.issue} "
+                                  f"class=hard_blocker attempt={args.attempt} "
+                                  f"BLOCKED — escalate to human")
+            print("BLOCKED — escalate to human")
+            print_ledger([e for e in lb["ledger"] if e["issue"] == args.issue])
+            sys.exit(1)
+
+        warroom_log(args.id, f"[{ts}] LOOPBACK edge={args.edge} issue={args.issue} "
+                              f"class={lb_class} attempt={args.attempt} "
+                              f"(same-issue {same_n}/{max_same}, total {total_n}/{max_total})")
+
+        if same_n > max_same:
+            save_state(args.id, state)
+            print(f"DEADLOCK: issue '{args.issue}' looped {same_n} times — escalate to the "
+                  f"human with the attempt ledger")
+            print_ledger([e for e in lb["ledger"] if e["issue"] == args.issue])
+            sys.exit(1)
+
+        if total_n > max_total:
+            save_state(args.id, state)
+            print(f"CEILING: {total_n} total loop-backs — halt, hand the human the attempt "
+                  f"ledger + best current state")
+            print_ledger(lb["ledger"])
+            sys.exit(1)
+
+        out = (f"OK: {same_n}/{max_same} same-issue, {total_n}/{max_total} total loop-backs "
+               f"remaining allowance {max_same - same_n}/{max_total - total_n}")
+        idempotency_record(state, args.idempotency_key, out)
+        save_state(args.id, state)
+
+    print(out)
     sys.exit(0)
 
 # ---------- gate ----------
 
 def cmd_gate(args):
-    state = load_state(args.id)
-    gates = state.setdefault("gates", {})
-    phase_gates = gates.setdefault(args.phase, {})
-
     if args.require:
+        state = load_state(args.id)
+        phase_gates = state.get("gates", {}).get(args.phase, {})
         if not phase_gates:
             print(f"GATE UNMET: {args.phase} — no checks recorded for this phase")
             sys.exit(1)
@@ -309,20 +587,27 @@ def cmd_gate(args):
     if not args.check or (args.passed == args.failed):  # neither or both given
         die("gate: need --check NAME with exactly one of --pass/--fail, or --require", 2)
 
-    ts = now_iso()
-    result = "pass" if args.passed else "fail"
-    phase_gates[args.check] = {"result": result, "note": args.note, "at": ts}
-    save_state(args.id, state)
-    warroom_log(args.id, f"[{ts}] GATE phase={args.phase} check={args.check} "
-                          f"result={result} note={args.note or ''}")
-    print(f"OK: {args.phase}/{args.check} = {result}")
+    with task_lock(args.id):
+        state = load_state(args.id)
+        cached = idempotency_lookup(state, args.idempotency_key)
+        if cached:
+            print(cached["output"])
+            sys.exit(0)
+
+        gates = state.setdefault("gates", {})
+        phase_gates = gates.setdefault(args.phase, {})
+        ts = now_iso()
+        result = "pass" if args.passed else "fail"
+        phase_gates[args.check] = {"result": result, "note": args.note, "at": ts}
+        out = f"OK: {args.phase}/{args.check} = {result}"
+        idempotency_record(state, args.idempotency_key, out)
+        save_state(args.id, state)
+        warroom_log(args.id, f"[{ts}] GATE phase={args.phase} check={args.check} "
+                              f"result={result} note={args.note or ''}")
+    print(out)
     sys.exit(0)
 
 # ---------- verify ----------
-
-# Criterion states beyond pass/fail: honest deferral rather than a fantasy pass
-# (spec §11; evidence: T17-09 AC2). These never block --require, only mark it conditional.
-CONDITIONAL_VERDICTS = ("blocked", "not_reproducible", "manual_confirmation_required")
 
 def require_status(state):
     criteria = state.get("criteria", {})
@@ -341,10 +626,27 @@ def print_criteria_table(state):
     for k, v in criteria.items():
         print(f"| {k} | {v['verdict']} | {v['evidence']} |")
 
-def cmd_verify(args):
-    state = load_state(args.id)
+def parse_bulk_verify_lines(text):
+    parsed = []
+    errors = []
+    for i, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 3 or not all(parts):
+            errors.append((i, raw))
+            continue
+        criterion, verdict, evidence = parts
+        if verdict not in VERIFY_VERDICTS:
+            errors.append((i, raw))
+            continue
+        parsed.append((criterion, verdict, evidence))
+    return parsed, errors
 
+def cmd_verify(args):
     if args.require:
+        state = load_state(args.id)
         ok, reason, conditional = require_status(state)
         print_criteria_table(state)
         if not ok:
@@ -356,21 +658,50 @@ def cmd_verify(args):
             print("OK: all recorded criteria pass")
         sys.exit(0)
 
+    if args.bulk:
+        text = sys.stdin.read()
+        parsed, errors = parse_bulk_verify_lines(text)
+        if errors:
+            print("MALFORMED bulk verify input — nothing recorded:")
+            for lineno, raw in errors:
+                print(f"  line {lineno}: {raw}")
+            sys.exit(2)
+        with task_lock(args.id):
+            state = load_state(args.id)
+            ts = now_iso()
+            for criterion, verdict, evidence in parsed:
+                state.setdefault("criteria", {})[criterion] = {
+                    "verdict": verdict, "evidence": evidence, "at": ts}
+                warroom_log(args.id, f"[{ts}] VERIFY criterion={criterion} "
+                                      f"verdict={verdict} evidence={evidence}")
+            save_state(args.id, state)
+        print(f"OK: {len(parsed)} criteria recorded via --bulk")
+        sys.exit(0)
+
     if not args.criterion or not args.verdict:
         die("verify: need --criterion NAME --verdict pass|fail|blocked|not_reproducible|"
-            "manual_confirmation_required --evidence '...', or --require", 2)
+            "manual_confirmation_required --evidence '...', or --require, or --bulk", 2)
     if not args.evidence:
         die("verify: --evidence is mandatory with --verdict (an unevidenced pass is "
             "exactly the fantasy this tool exists to kill)", 2)
 
-    ts = now_iso()
-    state.setdefault("criteria", {})[args.criterion] = {
-        "verdict": args.verdict, "evidence": args.evidence, "at": ts,
-    }
-    save_state(args.id, state)
-    warroom_log(args.id, f"[{ts}] VERIFY criterion={args.criterion} "
-                          f"verdict={args.verdict} evidence={args.evidence}")
-    print(f"OK: {args.criterion} = {args.verdict}")
+    with task_lock(args.id):
+        state = load_state(args.id)
+        cached = idempotency_lookup(state, args.idempotency_key)
+        if cached:
+            print(cached["output"])
+            sys.exit(0)
+
+        ts = now_iso()
+        state.setdefault("criteria", {})[args.criterion] = {
+            "verdict": args.verdict, "evidence": args.evidence, "at": ts,
+        }
+        out = f"OK: {args.criterion} = {args.verdict}"
+        idempotency_record(state, args.idempotency_key, out)
+        save_state(args.id, state)
+        warroom_log(args.id, f"[{ts}] VERIFY criterion={args.criterion} "
+                              f"verdict={args.verdict} evidence={args.evidence}")
+    print(out)
     sys.exit(0)
 
 # ---------- status ----------
@@ -484,92 +815,204 @@ def cmd_report(args):
 # ---------- episode ----------
 
 def cmd_episode_close(args):
-    state = load_state(args.id)
-    existing = read_episode_lines_for_task(args.id)
-    if existing and not args.amend:
-        die("already closed — use --amend to append a corrected line", 1)
+    with project_lock():
+        with task_lock(args.id):
+            state = load_state(args.id)
+            cached = idempotency_lookup(state, args.idempotency_key)
+            if cached:
+                print(cached["output"])
+                sys.exit(0)
 
-    ts = now_iso()
-    created = state.get("created")
+            existing = read_episode_lines_for_task(args.id)
+            if existing and not args.amend:
+                die("already closed — use --amend to append a corrected line", 1)
 
-    phases = [h["phase"] for h in state.get("phase_history", [])]
+            ts = now_iso()
+            created = state.get("created")
 
-    agents = []
-    for s in state.get("spawns", {}).get("log", []):
-        name = s.get("agent")
-        if name not in agents:
-            agents.append(name)
+            phases = [h["phase"] for h in state.get("phase_history", [])]
 
-    loopbacks = state.get("loopbacks", {})
+            agents = []
+            for s in state.get("spawns", {}).get("log", []):
+                name = s.get("agent")
+                if name not in agents:
+                    agents.append(name)
 
-    gates_summary = {}
-    for phase, checks in state.get("gates", {}).items():
-        passed = sum(1 for r in checks.values() if r["result"] == "pass")
-        failed = sum(1 for r in checks.values() if r["result"] != "pass")
-        gates_summary[phase] = {"pass": passed, "fail": failed}
+            loopbacks = state.get("loopbacks", {})
 
-    criteria_state = state.get("criteria", {})
-    criteria = {k: v["verdict"] for k, v in criteria_state.items()}
-    criteria_total = len(criteria)
-    criteria_verified = sum(1 for v in criteria.values() if v in ("pass", "verified"))
-    has_fail = any(v == "fail" for v in criteria.values())
+            gates_summary = {}
+            for phase, checks in state.get("gates", {}).items():
+                passed = sum(1 for r in checks.values() if r["result"] == "pass")
+                failed = sum(1 for r in checks.values() if r["result"] != "pass")
+                gates_summary[phase] = {"pass": passed, "fail": failed}
 
-    if criteria_total == 0 or has_fail:
-        verdict = "unverified"
-    elif criteria_verified == criteria_total:
-        verdict = "verified"
-    else:
-        verdict = "partial"
+            criteria_state = state.get("criteria", {})
+            criteria = {k: v["verdict"] for k, v in criteria_state.items()}
+            criteria_total = len(criteria)
+            criteria_verified = sum(1 for v in criteria.values() if v in ("pass", "verified"))
+            has_fail = any(v == "fail" for v in criteria.values())
 
-    wall_seconds = None
-    try:
-        wall_seconds = (datetime.datetime.fromisoformat(ts) -
-                         datetime.datetime.fromisoformat(created)).total_seconds()
-    except (TypeError, ValueError):
-        wall_seconds = None  # created missing/unparseable — never guess
+            if criteria_total == 0 or has_fail:
+                verdict = "unverified"
+            elif criteria_verified == criteria_total:
+                verdict = "verified"
+            else:
+                verdict = "partial"
 
-    close_revision = 1
-    if existing:
-        close_revision = max(e.get("close_revision", 1) for e in existing) + 1
+            wall_seconds = None
+            try:
+                wall_seconds = (datetime.datetime.fromisoformat(ts) -
+                                 datetime.datetime.fromisoformat(created)).total_seconds()
+            except (TypeError, ValueError):
+                wall_seconds = None  # created missing/unparseable — never guess
 
-    episode = {
-        "schema_version": 1,
-        "task": args.id,
-        "title": state.get("title"),
-        "kind": state.get("kind"),
-        "playbook": state.get("playbook"),
-        "created": created,
-        "closed": ts,
-        "phases": phases,
-        "spawns": state.get("spawns", {}).get("count", 0),
-        "agents": agents,
-        "loopbacks_total": loopbacks.get("total", 0),
-        "loopbacks_by_issue": loopbacks.get("by_issue", {}),
-        "gates": gates_summary,
-        "criteria": criteria,
-        "criteria_verified": criteria_verified,
-        "criteria_total": criteria_total,
-        "verdict": verdict,
-        "tokens": "unavailable",  # the CLI cannot see host token counts; never infer
-        "wall_seconds": wall_seconds,
-        "close_revision": close_revision,
-    }
+            close_revision = 1
+            if existing:
+                close_revision = max(e.get("close_revision", 1) for e in existing) + 1
 
-    # single os.write append of one line — atomic enough for local single-line appends.
-    line = (json.dumps(episode) + "\n").encode("utf-8")
-    fd = os.open(runs_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.write(fd, line)
-    finally:
-        os.close(fd)
+            episode = {
+                "schema_version": 1,
+                "task": args.id,
+                "title": state.get("title"),
+                "kind": state.get("kind"),
+                "playbook": state.get("playbook"),
+                "created": created,
+                "closed": ts,
+                "phases": phases,
+                "spawns": state.get("spawns", {}).get("count", 0),
+                "agents": agents,
+                "loopbacks_total": loopbacks.get("total", 0),
+                "loopbacks_by_issue": loopbacks.get("by_issue", {}),
+                "gates": gates_summary,
+                "criteria": criteria,
+                "criteria_verified": criteria_verified,
+                "criteria_total": criteria_total,
+                "verdict": verdict,
+                "tokens": "unavailable",  # the CLI cannot see host token counts; never infer
+                "wall_seconds": wall_seconds,
+                "close_revision": close_revision,
+            }
 
-    state["status"] = "closed"
-    save_state(args.id, state)
+            # single os.write append of one line — atomic enough for local single-line
+            # appends; the project lock is what actually serializes concurrent closers.
+            line = (json.dumps(episode) + "\n").encode("utf-8")
+            fd = os.open(runs_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
 
-    warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
-                          f"close_revision={close_revision}")
-    print(f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})")
+            state["status"] = "closed"
+            out = f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})"
+            idempotency_record(state, args.idempotency_key, out)
+            save_state(args.id, state)
+
+            warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
+                                  f"close_revision={close_revision}")
+    print(out)
     sys.exit(0)
+
+# ---------- audit ----------
+
+def cmd_audit(args):
+    state = load_state(args.id)
+    cfg = load_config()
+    warroom_text = read_warroom_text(args.id)
+    checks = []
+
+    def add(name, ok, detail):
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    # (a) spawns recorded vs distinct agent-ish names appearing in warroom SPAWN lines,
+    # and (best-effort) any "Task("/"Agent(" mentions that might indicate untracked
+    # spawns (this is exactly the eval-run leak: 16 real spawns, 10 recorded).
+    n_state_spawns = state.get("spawns", {}).get("count", 0)
+    warroom_spawn_lines = [ln for ln in warroom_text.splitlines()
+                            if re.search(r"\bSPAWN agent=", ln) and "REJECTED" not in ln]
+    n_warroom_spawns = len(warroom_spawn_lines)
+    task_agent_mentions = len(re.findall(r"\b(?:Task|Agent)\(", warroom_text))
+    a_ok = (n_state_spawns == n_warroom_spawns) and (task_agent_mentions <= n_state_spawns)
+    add("spawns_vs_warroom", a_ok,
+        f"state={n_state_spawns} warroom_spawn_lines={n_warroom_spawns} "
+        f"task/agent_mentions={task_agent_mentions}")
+
+    # (b) phase INTAKE while spawns/criteria/gates already exist
+    has_progress = (n_state_spawns > 0 or bool(state.get("criteria")) or
+                    bool(state.get("gates")))
+    b_ok = not (state.get("phase") == "INTAKE" and has_progress)
+    add("phase_intake_consistency", b_ok,
+        f"phase={state.get('phase')} spawns={n_state_spawns} "
+        f"criteria={len(state.get('criteria', {}))} gates={len(state.get('gates', {}))}")
+
+    # (c) messages count 0 while warroom has protocol "### " or "- id: msg-" entries
+    has_msg_evidence = bool(re.search(r"^### ", warroom_text, re.M) or
+                             re.search(r"- id: msg-", warroom_text))
+    c_ok = not (len(state.get("messages", [])) == 0 and has_msg_evidence)
+    add("messages_vs_warroom", c_ok,
+        f"messages={len(state.get('messages', []))} warroom_has_msg_entries={has_msg_evidence}")
+
+    # (d) episode closed but state not status=closed, and vice versa
+    episode_closed = bool(read_episode_lines_for_task(args.id))
+    state_closed = state.get("status") == "closed"
+    d_ok = episode_closed == state_closed
+    add("episode_vs_status", d_ok,
+        f"episode_closed={episode_closed} state_status={state.get('status')}")
+
+    # (e) unresolved same-issue loop counters at/over ceiling without a BLOCKED/deadlock
+    # note (a hard_blocker ledger entry, or a DEADLOCK/BLOCKED mention, for that issue)
+    max_same = cfg["max_same_issue_loops"]
+    by_issue = state.get("loopbacks", {}).get("by_issue", {})
+    ledger = state.get("loopbacks", {}).get("ledger", [])
+    e_bad = []
+    for issue, n in by_issue.items():
+        if n >= max_same:
+            noted = any(e["issue"] == issue and e.get("class") == "hard_blocker"
+                        for e in ledger)
+            noted = noted or (f"issue '{issue}'" in warroom_text and
+                               ("DEADLOCK" in warroom_text or "BLOCKED" in warroom_text))
+            if not noted:
+                e_bad.append(issue)
+    add("loop_ceiling_without_note", not e_bad,
+        f"issues_at_ceiling_without_note={e_bad}" if e_bad else "none")
+
+    # (f) stale lock files (should never survive a clean run — a leftover one means a
+    # process died mid-mutation, or a real bug)
+    stale = []
+    for lock_path in (os.path.join(task_dir(args.id), ".lock"),
+                       os.path.join(eaos_dir(), ".lock")):
+        if os.path.isfile(lock_path):
+            age = time.time() - os.path.getmtime(lock_path)
+            if age > LOCK_STALE_SECONDS:
+                stale.append((lock_path, round(age)))
+    add("stale_locks", not stale, f"stale={stale}" if stale else "none")
+
+    # (g) revision present and monotonic (v2 files) — a single snapshot can only check
+    # presence/validity, not history, but a missing/invalid revision is itself the bug.
+    sv = state.get("schema_version")
+    rev = state.get("revision")
+    g_ok = True
+    if sv is not None and sv >= 2:
+        g_ok = isinstance(rev, int) and rev >= 1
+    add("revision_present", g_ok, f"schema_version={sv} revision={rev}")
+
+    # (h) criteria contain verdict values outside the allowed enum
+    bad_verdicts = [k for k, v in state.get("criteria", {}).items()
+                     if v.get("verdict") not in VERIFY_VERDICTS]
+    add("criteria_verdict_enum", not bad_verdicts,
+        f"bad={bad_verdicts}" if bad_verdicts else "none")
+
+    discrepancies = [c for c in checks if not c["ok"]]
+
+    if args.json:
+        print(json.dumps({"task": args.id, "checks": checks,
+                           "discrepancy_count": len(discrepancies)}, indent=2))
+    else:
+        print(f"Audit: {args.id}")
+        for c in checks:
+            status = "ok" if c["ok"] else "DISCREPANCY"
+            print(f"  [{status}] {c['name']}: {c['detail']}")
+        print(f"{len(discrepancies)} discrepancy(ies) found" if discrepancies else "clean")
+    sys.exit(1 if discrepancies else 0)
 
 # ---------- argparse wiring ----------
 
@@ -589,6 +1032,9 @@ def build_parser():
     p_task_new.add_argument("title")
     p_task_new.add_argument("--kind", default=None)
     p_task_new.add_argument("--playbook", default=None)
+    p_task_new.add_argument("--parent", default=None)
+    p_task_new.add_argument("--allow-duplicate", action="store_true", dest="allow_duplicate")
+    p_task_new.add_argument("--reason", default=None)
     p_task_new.set_defaults(func=cmd_task_new)
 
     p_append = sub.add_parser("append")
@@ -596,19 +1042,23 @@ def build_parser():
     p_append.add_argument("--from", dest="frm", required=True)
     p_append.add_argument("--to", required=True)
     p_append.add_argument("--type", required=True, choices=MSG_TYPES)
-    p_append.add_argument("--body", required=True)
+    p_append.add_argument("--body", default=None)
+    p_append.add_argument("--file", default=None)
     p_append.add_argument("--ref", default=None)
     p_append.add_argument("--priority", default="normal")
+    p_append.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_append.set_defaults(func=cmd_append)
 
     p_phase = sub.add_parser("phase")
     p_phase.add_argument("id")
     p_phase.add_argument("phase")
+    p_phase.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_phase.set_defaults(func=cmd_phase)
 
     p_spawn = sub.add_parser("spawn")
     p_spawn.add_argument("id")
     p_spawn.add_argument("--agent", required=True)
+    p_spawn.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_spawn.set_defaults(func=cmd_spawn)
 
     p_loop = sub.add_parser("loopback")
@@ -616,6 +1066,8 @@ def build_parser():
     p_loop.add_argument("--edge", required=True)
     p_loop.add_argument("--issue", required=True)
     p_loop.add_argument("--attempt", required=True)
+    p_loop.add_argument("--class", dest="klass", choices=LOOPBACK_CLASSES, default=None)
+    p_loop.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_loop.set_defaults(func=cmd_loopback)
 
     p_gate = sub.add_parser("gate")
@@ -626,15 +1078,17 @@ def build_parser():
     p_gate.add_argument("--fail", dest="failed", action="store_true")
     p_gate.add_argument("--note", default=None)
     p_gate.add_argument("--require", action="store_true")
+    p_gate.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_gate.set_defaults(func=cmd_gate)
 
     p_verify = sub.add_parser("verify")
     p_verify.add_argument("id")
     p_verify.add_argument("--criterion", default=None)
-    p_verify.add_argument("--verdict", default=None, choices=[
-        "pass", "fail", "blocked", "not_reproducible", "manual_confirmation_required"])
+    p_verify.add_argument("--verdict", default=None, choices=list(VERIFY_VERDICTS))
     p_verify.add_argument("--evidence", default=None)
     p_verify.add_argument("--require", action="store_true")
+    p_verify.add_argument("--bulk", action="store_true")
+    p_verify.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_verify.set_defaults(func=cmd_verify)
 
     p_status = sub.add_parser("status")
@@ -650,7 +1104,13 @@ def build_parser():
     p_episode_close = episode_sub.add_parser("close")
     p_episode_close.add_argument("id")
     p_episode_close.add_argument("--amend", action="store_true")
+    p_episode_close.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_episode_close.set_defaults(func=cmd_episode_close)
+
+    p_audit = sub.add_parser("audit")
+    p_audit.add_argument("id")
+    p_audit.add_argument("--json", action="store_true")
+    p_audit.set_defaults(func=cmd_audit)
 
     return p
 

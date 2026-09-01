@@ -10,6 +10,24 @@ description: >
 The discovery step of the loop: the OS finds work instead of waiting for it. This skill
 is **strictly read-only** — it observes, correlates, and proposes. It never fixes.
 
+## Step 0 — Coverage manifest (before ANY scanning)
+
+Enumerate every top-level subsystem FIRST: source directories, services, apps, packages,
+infra, extensions, docs — anything with its own build or lifecycle. Write the manifest at
+the TOP of the output:
+
+```
+| Subsystem | Audited? | Why skipped (if skipped) |
+|---|---|---|
+| platform/ | yes | |
+| scraper-service/ | yes | |
+| extension/ | no | out of scope per ask — UI-only request |
+```
+
+Every subsystem gets `yes` or an explicit skip-with-reason. An unlisted subsystem is a
+triage defect. (Mechanism M-009 — motivated by eval run 1, where triage
+dug where memory pointed and silently skipped 2 of 6 services the baseline arm audited.)
+
 ## Scan (all read-only)
 
 1. **CI status.** Latest pipeline runs, failing tests, flaky jobs. Note run IDs.

@@ -114,7 +114,7 @@ mechanisms:
   - id: M-009
     name: triage-coverage-manifest
     reliability: epistemic
-    status: proposed
+    status: instrumented
     motivating_evidence: [eval run 1 (evals/results/2026-09-01-run1.md) — EAOS triage skipped 2 of 6 subsystems the baseline arm audited; recall failure with no mechanism]
     expected_effect: triage enumerates top-level services first; each gets a pass or an explicit skip-with-reason, guaranteeing breadth
     primary_metric: subsystems_audited_over_subsystems_present
@@ -126,7 +126,7 @@ mechanisms:
   - id: M-010
     name: stakes-proportional-lifecycle
     reliability: process
-    status: proposed
+    status: instrumented
     motivating_evidence: [eval run 2 (evals/results/2026-09-01-run2.md) — 14.4x input tokens on a toy build; defect yield concentrated in security review + verifier while launch-review/ops/docs/narration yielded none]
     expected_effect: lifecycle phases scale with stakes (deploy-bound? money-path? users?) so ceremony cost tracks defect-catching value
     primary_metric: tokens_per_caught_defect

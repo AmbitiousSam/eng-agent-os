@@ -13,6 +13,8 @@
 
 ## Classification
 - complexity: <trivial | small | standard | complex>
+- stakes: <toy | internal | production>   # what breaks if this is wrong — drives which
+                                          # lifecycle phases run (routing.yaml > stakes_rules)
 - signals: [<tag>, <tag>]
 
 ## Open questions

@@ -142,9 +142,10 @@ parallel), where the war room is, and that you're starting.
 
 Spawn the **requirements** subagent (Task tool). Give it: the task, the war-room path, the
 codebase context, and `templates/task-spec.md`. It must return: the path to `task-spec.md`,
-the **complexity** (trivial/small/standard/complex), the **kind**
-(feature/bug/refactor/chore/incident/question), the **signals** tags, and any **open
-questions** (each marked `blocking` or `fyi`). `question` = the human wants understanding, not
+the **complexity** (trivial/small/standard/complex), the **stakes**
+(toy/internal/production — what breaks if it's wrong; see `routing.yaml > stakes_levels`),
+the **kind** (feature/bug/refactor/chore/incident/question), the **signals** tags, and any
+**open questions** (each marked `blocking` or `fyi`). `question` = the human wants understanding, not
 a change (routes to the read-only investigation playbook); `incident` = production is broken
 now (routes to incident-response).
 
@@ -160,6 +161,10 @@ spot, spawn `developer` to make the change + self-review, then go to Step 8.
 Apply `routing.yaml`:
 - Start with `always` = requirements, developer, code-reviewer.
 - Add each `conditional` agent whose `when` rule matches the complexity/signals.
+- Apply `routing.yaml > stakes_rules`: at `toy` stakes, skip the listed agents/gates (org
+  theater scales with stakes, not enthusiasm) — but a conditional SIGNAL (auth/payments/pii)
+  always overrides a stakes-skip for security-reviewer: the defect-catchers are never
+  stakes-skipped. Note applied skips in the war room.
 - Respect the spawn budget (`routing.yaml > budget.max_agent_spawns_per_task`): tally every
   subagent spawn in the war room as you go; when a spawn would exceed the cap, downgrade
   conditional agents one model tier, then drop the lowest-value one — and note the omission
@@ -255,6 +260,9 @@ record each check via `eaos gate <id> PLAN --check <name> --pass|--fail`, advanc
 
 ## Step 5 — IMPLEMENT (+ tests in parallel)
 
+- Model per spawn: `routing.yaml > models.mode`. `inherit` (default) → pass no model —
+  the user's session model runs everywhere. `tiered` → pass each agent's tier model where
+  the harness supports it; where it doesn't, inherit and note it in the war room.
 - Spawn **developer** with spec + approved design + **impact map + repo map** → it writes code
   and returns HANDOFF + a PR description + self-test notes. It must edit the files named in the
   impact map, follow the repo's conventions (from the repo map), and stay within scope — no

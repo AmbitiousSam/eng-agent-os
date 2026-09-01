@@ -96,11 +96,14 @@ class TestTaskNew(EaosTestCase):
         self.init()
         results = []
 
-        def worker():
-            rc, out, err = run(self.cwd, "task", "new", "concurrent")
+        def worker(i):
+            # Distinct titles: identical titles now collide on the duplicate-fingerprint
+            # check (by design — see TestDuplicateDetection), so this test uses distinct
+            # titles to isolate what it actually exercises: the id-allocation race.
+            rc, out, err = run(self.cwd, "task", "new", f"concurrent {i}")
             results.append((rc, out.strip()))
 
-        threads = [threading.Thread(target=worker) for _ in range(5)]
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
         for t in threads:
             t.start()
         for t in threads:
@@ -430,6 +433,309 @@ class TestSaveStateAtomicity(EaosTestCase):
         entries = os.listdir(os.path.join(self.cwd, ".eaos", tid))
         self.assertFalse(any(e.startswith("state.json.tmp") for e in entries),
                           f"leftover tmp file(s): {entries}")
+
+
+class TestLocking(EaosTestCase):
+    def test_concurrent_spawns_both_succeed_serially_with_correct_tree_total(self):
+        self.init(max_spawns=10)
+        rc, out, err = run(self.cwd, "task", "new", "parent")
+        self.assertEqual(rc, 0, err)
+        parent = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "child", "--parent", parent)
+        self.assertEqual(rc, 0, err)
+        child = out.strip()
+
+        results = []
+
+        def worker(task_id, agent):
+            rc, out, err = run(self.cwd, "spawn", task_id, "--agent", agent)
+            results.append((rc, out, err))
+
+        threads = [
+            threading.Thread(target=worker, args=(parent, "agent-a")),
+            threading.Thread(target=worker, args=(child, "agent-b")),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertTrue(all(rc == 0 for rc, _, err in results), results)
+
+        with open(os.path.join(self.cwd, ".eaos", parent, "state.json")) as f:
+            parent_state = json.load(f)
+        with open(os.path.join(self.cwd, ".eaos", child, "state.json")) as f:
+            child_state = json.load(f)
+        self.assertEqual(parent_state["spawns"]["count"] + child_state["spawns"]["count"], 2)
+
+        rc, out, err = run(self.cwd, "spawn", child, "--agent", "agent-c")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("tree total 3/10", out)
+
+
+class TestIdempotency(EaosTestCase):
+    def test_spawn_idempotency_key_replay_no_double_spawn(self):
+        self.init(max_spawns=5)
+        tid = self.new_task()
+        rc, out1, err = run(self.cwd, "spawn", tid, "--agent", "developer",
+                             "--idempotency-key", "retry-1")
+        self.assertEqual(rc, 0, err)
+
+        rc, out2, err = run(self.cwd, "spawn", tid, "--agent", "developer",
+                             "--idempotency-key", "retry-1")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out1, out2)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["spawns"]["count"], 1)
+
+
+class TestEpisodeCloseIdempotency(EaosTestCase):
+    def test_replay_without_amend_succeeds_but_bare_double_close_still_refused(self):
+        self.init()
+        tid = self.new_task()
+        rc, out1, err = run(self.cwd, "episode", "close", tid,
+                             "--idempotency-key", "close-1")
+        self.assertEqual(rc, 0, err)
+
+        # A retried close with the same key must succeed WITHOUT --amend — that's the
+        # real-world case (a hook retrying a call whose response it never saw).
+        rc, out2, err = run(self.cwd, "episode", "close", tid,
+                             "--idempotency-key", "close-1")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out1, out2)
+
+        # A close with no key (or a different key) is still a genuine double-close.
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("already closed", out + err)
+
+
+class TestParentChildBudget(EaosTestCase):
+    def test_tree_budget_exceeded_across_parent_and_child(self):
+        self.init(max_spawns=2)
+        rc, out, err = run(self.cwd, "task", "new", "root task")
+        self.assertEqual(rc, 0, err)
+        parent = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "child task", "--parent", parent)
+        self.assertEqual(rc, 0, err)
+        child = out.strip()
+
+        rc, out, err = run(self.cwd, "spawn", parent, "--agent", "a1")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "spawn", parent, "--agent", "a2")
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "spawn", child, "--agent", "a3")
+        self.assertEqual(rc, 1)
+        self.assertIn("BUDGET EXCEEDED", out)
+        self.assertIn("3/2", out)
+        self.assertIn(parent, out)  # names the root of the tree
+
+    def test_parent_must_exist(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "orphan", "--parent", "T-999")
+        self.assertEqual(rc, 2)
+
+
+class TestDuplicateDetection(EaosTestCase):
+    def test_exact_duplicate_blocked_and_allow_duplicate_overrides(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Fix the flaky login test")
+        self.assertEqual(rc, 0, err)
+        first = out.strip()
+
+        rc, out, err = run(self.cwd, "task", "new", "Fix the flaky login test")
+        self.assertEqual(rc, 1)
+        self.assertIn("resume it instead", out + err)
+        self.assertIn(first, out + err)
+
+        rc, out, err = run(self.cwd, "task", "new", "Fix the flaky login test",
+                            "--allow-duplicate", "--reason", "two people paged at once")
+        self.assertEqual(rc, 0, err)
+        second = out.strip()
+        self.assertNotEqual(first, second)
+
+        with open(os.path.join(self.cwd, ".eaos", second, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["duplicate_override_reason"], "two people paged at once")
+
+    def test_allow_duplicate_without_reason_is_usage_error(self):
+        self.init()
+        self.new_task("some title")
+        rc, out, err = run(self.cwd, "task", "new", "some title", "--allow-duplicate")
+        self.assertEqual(rc, 2)
+
+    def test_closed_task_does_not_block_duplicate(self):
+        self.init()
+        tid = self.new_task("Sample task")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e")
+        run(self.cwd, "episode", "close", tid)
+        rc, out, err = run(self.cwd, "task", "new", "Sample task")
+        self.assertEqual(rc, 0, err)
+
+
+class TestAppendFile(EaosTestCase):
+    def test_append_file_dash_reads_stdin(self):
+        self.init()
+        tid = self.new_task()
+        result = subprocess.run(
+            [sys.executable, EAOS, "append", tid, "--from", "developer", "--to",
+             "architect", "--type", "PROPOSE", "--file", "-"],
+            cwd=self.cwd, capture_output=True, text=True, input="line one\nline two\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["messages"][0]["body"], "line one\nline two")
+
+    def test_append_file_and_body_mutually_exclusive(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "append", tid, "--from", "developer", "--to",
+                            "architect", "--type", "PROPOSE", "--body", "x", "--file", "-")
+        self.assertEqual(rc, 2)
+
+
+class TestVerifyBulk(EaosTestCase):
+    def test_bulk_happy_path(self):
+        self.init()
+        tid = self.new_task()
+        bulk_input = "AC-1 | pass | tests/x.py::ok\n# a comment\n\nAC-2 | fail | tests/y.py::bad\n"
+        result = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk"],
+            cwd=self.cwd, capture_output=True, text=True, input=bulk_input,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["criteria"]["AC-1"]["verdict"], "pass")
+        self.assertEqual(state["criteria"]["AC-2"]["verdict"], "fail")
+
+    def test_bulk_malformed_line_records_nothing(self):
+        self.init()
+        tid = self.new_task()
+        bulk_input = "AC-1 | pass | ev\nthis line has no pipes\n"
+        result = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk"],
+            cwd=self.cwd, capture_output=True, text=True, input=bulk_input,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("this line has no pipes", result.stdout)
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state.get("criteria", {}), {})
+
+
+class TestLoopbackClass(EaosTestCase):
+    def test_hard_blocker_exits_1_immediately_regardless_of_counters(self):
+        self.init(max_same_issue=100, max_total_loopbacks=100)
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+                            "--issue", "no-fix-possible", "--attempt", "first try",
+                            "--class", "hard_blocker")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED — escalate to human", out)
+
+    def test_transient_allows_identical_repeat(self):
+        self.init(max_same_issue=100, max_total_loopbacks=100)
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "QA->DEV",
+                            "--issue", "flaky", "--attempt", "same text",
+                            "--class", "transient")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "QA->DEV",
+                            "--issue", "flaky", "--attempt", "same text",
+                            "--class", "transient")
+        self.assertEqual(rc, 0, err)
+
+    def test_recoverable_identical_retry_refused(self):
+        self.init(max_same_issue=100, max_total_loopbacks=100)
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "QA->DEV",
+                            "--issue", "flaky", "--attempt", "same text")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "QA->DEV",
+                            "--issue", "flaky", "--attempt", "same text")
+        self.assertEqual(rc, 1)
+        self.assertIn("retry must vary", out)
+
+
+class TestAudit(EaosTestCase):
+    def test_audit_clean_on_well_run_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "audit", tid)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("clean", out)
+
+    def test_audit_discrepancy_phase_and_messages(self):
+        self.init()
+        tid = self.new_task()
+        # (b): spawn recorded but phase never left INTAKE
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        # (c): warroom shows protocol entries the state never recorded (messages == 0)
+        warroom = os.path.join(self.cwd, ".eaos", tid, "warroom.md")
+        with open(warroom, "a") as f:
+            f.write("\n### Untracked review note\n- id: msg-999\n")
+
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        report = json.loads(out)
+        by_name = {c["name"]: c["ok"] for c in report["checks"]}
+        self.assertFalse(by_name["phase_intake_consistency"])
+        self.assertFalse(by_name["messages_vs_warroom"])
+        self.assertGreaterEqual(report["discrepancy_count"], 2)
+
+
+class TestSchemaMigration(EaosTestCase):
+    def make_legacy_v1_task(self, task_id="T-001", title="Legacy task"):
+        d = os.path.join(self.cwd, ".eaos", task_id)
+        os.makedirs(os.path.join(d, "artifacts"), exist_ok=True)
+        ts = "2020-01-01T00:00:00"
+        with open(os.path.join(d, "warroom.md"), "w") as f:
+            f.write(f"# {task_id}: {title}\n\nCreated: {ts}\nStatus: active\n\n"
+                     f"## War Room Log\n")
+        # Deliberately the *pre-v2* shape: no schema_version, revision, parent,
+        # fingerprint, or idempotency_keys.
+        state = {
+            "id": task_id, "title": title, "kind": None, "playbook": None,
+            "created": ts, "status": "active", "phase": "INTAKE",
+            "phase_history": [{"phase": "INTAKE", "at": ts}],
+            "next_msg_num": 1, "messages": [], "spawns": {"count": 0, "log": []},
+            "loopbacks": {"total": 0, "by_issue": {}, "ledger": []},
+            "gates": {}, "criteria": {},
+        }
+        with open(os.path.join(d, "state.json"), "w") as f:
+            json.dump(state, f)
+        return task_id
+
+    def test_v1_state_file_loads_and_migrates_on_next_save(self):
+        self.init()
+        tid = self.make_legacy_v1_task()
+
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "phase", tid, "DESIGN")
+        self.assertEqual(rc, 0, err)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["schema_version"], 2)
+        self.assertEqual(state["revision"], 1)
+        self.assertIsNone(state["parent"])
+        self.assertEqual(state["idempotency_keys"], [])
 
 
 if __name__ == "__main__":

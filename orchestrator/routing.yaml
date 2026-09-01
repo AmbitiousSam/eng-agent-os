@@ -55,6 +55,25 @@ playbooks:
 # ---- Complexity scale (set by requirements-analyst) ----
 complexity_levels: [trivial, small, standard, complex]   # 0..3
 
+# ---- Stakes (set by requirements-analyst at INTAKE; M-010 stakes-proportional lifecycle) ----
+# Complexity measures how HARD the work is; stakes measure what BREAKS if it's wrong.
+# Evidence: eval run 2 — full lifecycle on a non-deployed toy cost 14.4x baseline tokens
+# while launch-review/ops/docs phases yielded zero defects (evals/results/2026-09-01-run2.md).
+# Ceremony scales with stakes, never with enthusiasm:
+#   toy        — nothing deploys, no real users/money/data at risk (demos, spikes, learning)
+#   internal   — real users are teammates; blast radius is inconvenience, not money/trust
+#   production — external users, money paths, PII, or anything deploy-bound
+stakes_levels: [toy, internal, production]
+stakes_rules:
+  toy:                       # keep the defect-catchers, drop the org theater
+    skip: [launch_review, devops-engineer, platform-engineer, sre-observability, tech-writer]
+    keep_note: "security-reviewer still activates on money/auth signals — run 2's defect
+                yield came from security review + verifier, so they are never stakes-skipped"
+  internal:
+    skip: [launch_review]    # unless a conditional signal (auth/pii/payments) pulls it back
+  production: {}             # full lifecycle; no skips
+
+
 # ---- Task kind (set by requirements-analyst; drives the flow + playbook selection) ----
 # The front door takes ANY engineering work: build it (feature/chore/refactor), fix it (bug),
 # respond to it (incident), or understand it (question). Kinds without a dedicated playbook
@@ -122,6 +141,12 @@ agents:
 # change ONLY these three values; every agent references the tier name, not a model. (Concrete
 # examples as of 2026: reasoning≈Opus 4.8, coding≈Sonnet 4.6, cheap≈Haiku 4.5 — informational.)
 models:
+  # mode: inherit (default) — every spawn uses the model the USER selected for the session.
+  #   Portable to any tool/provider, zero assumptions; what you pick is what runs.
+  # mode: tiered — opt-in cost profile: spawns get the by_agent tier below, where the
+  #   harness supports a per-spawn model. Falls back to inherit (with a war-room note)
+  #   where it doesn't. The config never silently promises tiers it can't deliver.
+  mode: inherit
   tiers:
     reasoning: opus      # planning, architecture, threat modeling, hard calls
     coding:    sonnet    # implementation, tests, diff review, pipelines
