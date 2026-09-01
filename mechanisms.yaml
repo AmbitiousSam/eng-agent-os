@@ -1,0 +1,112 @@
+# EAOS mechanism registry — kernel law 6 (spec §12).
+#
+# Governance (frozen-period rule):
+#   New idea without run evidence      -> entry here, status: proposed. Nothing else.
+#   Observed failure in a captured run -> link the raw artifact, define expected effect
+#                                         + metric, instrument narrowly, evaluate, then
+#                                         validate / revise / reject / retire.
+# The validator checks SHAPE; the evaluator (eval runs) determines EFFECT; the maintainer
+# retains, revises, or removes. Removal conditions are executed, not admired.
+#
+# Reliability lens (which failure class a mechanism serves):
+#   process    — phases, gates, budgets, artifacts
+#   epistemic  — claims, unknowns, probes, grounding evidence
+#   execution  — atomic state, idempotency, locks, crash behavior
+#   evaluation — controlled comparison, blinded grading, cost accounting
+
+mechanisms:
+  - id: M-001
+    name: maker-checker-isolation
+    reliability: epistemic
+    status: active
+    motivating_evidence: [T-017 warroom — 5 defects caught incl. pre-existing double-credit race; verifier honest-skip of AC2]
+    expected_effect: independent contexts catch defects the author cannot see
+    primary_metric: defects_caught_per_task
+    guardrails: [tokens_per_task]
+    owner: kernel
+    evaluation_due_after_runs: 10
+    removal_condition: baseline arm catches equal defects at lower cost across the eval set
+
+  - id: M-002
+    name: runtime-cli-binding-gates
+    reliability: process
+    status: active
+    motivating_evidence: [harsh-review 2026-07-13 — all quality gates honor-system; T-017 partial adoption trend]
+    expected_effect: ceilings/verdicts become exit codes the model cannot skip
+    primary_metric: false_completion_rate
+    guardrails: [task_wall_time]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 10
+    removal_condition: false completions no lower than prompt-only enforcement
+
+  - id: M-003
+    name: parent-tree-spawn-budgets
+    reliability: process
+    status: proposed
+    motivating_evidence: [T-017 — 23 spawns vs cap 12 invisible across child tasks T-018..T-027]
+    expected_effect: budget binds at the epic level, forcing consolidation decisions
+    primary_metric: spawns_over_budget_undetected
+    guardrails: [defects_caught_per_task]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 5
+    removal_condition: no epic-shaped run where the aggregated cap changes a decision
+
+  - id: M-004
+    name: scoped-context-packs
+    reliability: process
+    status: proposed
+    motivating_evidence: [T-017 — worker at 1.03M input / 82k output; ~36% coordination output share]
+    expected_effect: role-scoped context cuts input tokens without cutting task success
+    primary_metric: worker_input_tokens
+    guardrails: [criteria_pass_rate, defects_caught_per_task]
+    owner: pack-compiler
+    evaluation_due_after_runs: 5
+    removal_condition: no material token reduction or degraded quality vs full context
+
+  - id: M-005
+    name: grounding-contract
+    reliability: epistemic
+    status: proposed
+    motivating_evidence: [disk scan — codebase map most-reused artifact (9/10 tasks, sre); user-reported weakness on unfamiliar codebases]
+    expected_effect: evidence-precedence world model improves localization accuracy
+    primary_metric: localization_accuracy
+    guardrails: [ground_phase_tokens]
+    owner: kernel
+    evaluation_due_after_runs: 5
+    removal_condition: localization no better than baseline GROUND across eval set
+
+  - id: M-006
+    name: runtime-memory-retrieval
+    reliability: epistemic
+    status: proposed
+    motivating_evidence: [disk scan — 7/23 memory files write-only; index.md dead in 4/6 projects]
+    expected_effect: runtime-injected memory influences decisions instead of rotting
+    primary_metric: retrieved_entries_influencing_decisions
+    guardrails: [context_budget]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 10
+    removal_condition: retrieved entries never change a plan or catch a repeat mistake
+
+  - id: M-007
+    name: hooks-as-accelerators
+    reliability: execution
+    status: proposed
+    motivating_evidence: [T-017 — CLI verbs bypassed mid-run (messages:0, loopbacks:0 despite re-review)]
+    expected_effect: host interception reduces bookkeeping bypass without model cooperation
+    primary_metric: audit_discrepancies_per_run
+    guardrails: [hook_failure_rate]
+    owner: adapters
+    evaluation_due_after_runs: 5
+    removal_condition: bypass rate unchanged vs audit-only enforcement
+
+  - id: M-008
+    name: episode-capture
+    reliability: evaluation
+    status: instrumented
+    motivating_evidence: [trust ladder rung 2 — zero captured runs; spec §14 step 1]
+    expected_effect: structured run records make every other mechanism evaluable
+    primary_metric: eval_reports_produced
+    guardrails: []
+    owner: scripts/eaos
+    evaluation_due_after_runs: 3
+    removal_condition: n/a — instrumentation; simplify if fields go unused by reports

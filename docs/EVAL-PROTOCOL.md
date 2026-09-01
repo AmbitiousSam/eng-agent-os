@@ -54,3 +54,22 @@ catastrophic miss in one arm is signal, not noise.
   as "worth investigating further" or "worth acting on now," not as a p-value claim.
 - Live-testing this across IDEs other than the one it's run in (see `adapters/solo-mode.md` for
   the honest cross-IDE story).
+
+## Run report — milestone completion checklist (v3 spec §13/§14)
+
+Migration Step 1 is complete only when one captured comparison can answer ALL of:
+
+1. What exact task was attempted (statement, repo, commit)?
+2. What did plain Claude Code (evals/baseline-CLAUDE.md arm) do?
+3. What did EAOS do?
+4. Which acceptance criteria passed / failed / were honestly deferred, in each arm?
+5. Which defects were caught, in each arm?
+6. Was either system falsely confident (claimed done while a hidden criterion failed)?
+7. Tokens, estimated cost, wall time — per arm (report "unavailable" where the host
+   doesn't expose numbers; never infer).
+8. Which EAOS mechanisms changed the outcome (link mechanisms.yaml ids)?
+9. Which mechanisms added cost without measurable value?
+10. Verdict by task class (bug / incident / feature / refactor / business-rule /
+    cross-service) — no aggregate-only reporting.
+
+Store each report next to its captured run in examples/runs/<date>-<task>/report.md.

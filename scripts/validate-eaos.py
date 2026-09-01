@@ -296,6 +296,40 @@ if os.path.isdir(cmd_dir) and exists(setup_rel):
             continue
         (ok if f"commands/{f}" in setup_text else err)(f"{setup_rel} installs commands/{f}")
 
+
+# ---------- 9. mechanisms.yaml shape (kernel law 6 / spec section 12) ----------
+# Validator checks SHAPE only; the evaluator determines effect.
+mech_rel = "mechanisms.yaml"
+if exists(mech_rel):
+    if HAVE_YAML:
+        import yaml as _y
+        try:
+            mdoc = _y.safe_load(read(os.path.join(ROOT, mech_rel))) or {}
+            entries = mdoc.get("mechanisms") or []
+            REQ = ["id", "name", "status", "motivating_evidence", "expected_effect",
+                   "primary_metric", "owner", "removal_condition"]
+            STATUSES = {"proposed", "instrumented", "active", "validated", "rejected", "retired"}
+            seen_ids = set()
+            bad = 0
+            for m in entries:
+                mid = (m or {}).get("id", "<missing-id>")
+                missing = [f for f in REQ if not (m or {}).get(f)]
+                if missing:
+                    err(f"{mech_rel}: {mid} missing fields: {', '.join(missing)}"); bad += 1
+                if (m or {}).get("status") not in STATUSES:
+                    err(f"{mech_rel}: {mid} invalid status '{(m or {}).get('status')}'"); bad += 1
+                if mid in seen_ids:
+                    err(f"{mech_rel}: duplicate id {mid}"); bad += 1
+                seen_ids.add(mid)
+            if not bad:
+                ok(f"{mech_rel}: {len(entries)} mechanism entries structurally complete")
+        except Exception as ex:
+            err(f"{mech_rel}: failed to parse — {ex}")
+    else:
+        warn(f"{mech_rel} present but PyYAML missing — shape check skipped")
+else:
+    warn(f"{mech_rel} not found — mechanism registry not yet started")
+
 # ---------- report ----------
 print("EAOS validation\n" + "=" * 40)
 for c in checks:

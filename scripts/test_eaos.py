@@ -275,5 +275,162 @@ class TestStatusAndPhase(EaosTestCase):
         self.assertIn("DESIGN", out)
 
 
+class TestEpisode(EaosTestCase):
+    def test_episode_close_happy_path(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Sample", "--kind", "bug",
+                            "--playbook", "bugfix-v1")
+        self.assertEqual(rc, 0, err)
+        tid = out.strip()
+
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        run(self.cwd, "spawn", tid, "--agent", "qa")
+        run(self.cwd, "spawn", tid, "--agent", "developer")  # dup agent -> dedup in episode
+        run(self.cwd, "loopback", tid, "--edge", "QA->DEV", "--issue", "flaky",
+            "--attempt", "x -> fail")
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+
+        runs = os.path.join(self.cwd, ".eaos", "runs.jsonl")
+        with open(runs) as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(lines), 1)
+        ep = lines[0]
+        self.assertEqual(ep["schema_version"], 1)
+        self.assertEqual(ep["task"], tid)
+        self.assertEqual(ep["title"], "Sample")
+        self.assertEqual(ep["kind"], "bug")
+        self.assertEqual(ep["playbook"], "bugfix-v1")
+        self.assertEqual(ep["spawns"], 3)
+        self.assertEqual(ep["agents"], ["developer", "qa"])
+        self.assertEqual(ep["loopbacks_total"], 1)
+        self.assertEqual(ep["loopbacks_by_issue"], {"flaky": 1})
+        self.assertEqual(ep["gates"], {"DESIGN": {"pass": 1, "fail": 0}})
+        self.assertEqual(ep["criteria"], {"AC-1": "pass"})
+        self.assertEqual(ep["criteria_verified"], 1)
+        self.assertEqual(ep["criteria_total"], 1)
+        self.assertEqual(ep["verdict"], "verified")
+        self.assertEqual(ep["tokens"], "unavailable")
+        self.assertEqual(ep["close_revision"], 1)
+        self.assertIn("wall_seconds", ep)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["status"], "closed")
+
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("episode: closed", out)
+
+    def test_double_close_refused(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e")
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("already closed", out + err)
+
+    def test_amend_appends_with_incremented_revision(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e")
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "episode", "close", tid, "--amend")
+        self.assertEqual(rc, 0, err)
+
+        runs = os.path.join(self.cwd, ".eaos", "runs.jsonl")
+        with open(runs) as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["close_revision"], 1)
+        self.assertEqual(lines[1]["close_revision"], 2)
+        self.assertEqual(lines[1]["task"], tid)
+
+    def test_task_new_kind_flows_through_to_episode(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Feature work",
+                            "--kind", "feature", "--playbook", "feature-v2")
+        self.assertEqual(rc, 0, err)
+        tid = out.strip()
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["kind"], "feature")
+        self.assertEqual(state["playbook"], "feature-v2")
+
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e")
+        run(self.cwd, "episode", "close", tid)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            ep = json.loads(f.readline())
+        self.assertEqual(ep["kind"], "feature")
+        self.assertEqual(ep["playbook"], "feature-v2")
+
+
+class TestVerifyConditional(EaosTestCase):
+    def test_blocked_criterion_conditional_pass(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+        run(self.cwd, "verify", tid, "--criterion", "AC-2", "--verdict", "blocked",
+            "--evidence", "e2")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("CONDITIONAL", out)
+        self.assertIn("AC-2", out)
+
+    def test_report_conditional_subsection(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+        run(self.cwd, "verify", tid, "--criterion", "AC-2",
+            "--verdict", "manual_confirmation_required", "--evidence", "e2")
+        rc, out, err = run(self.cwd, "report", tid)
+        self.assertEqual(rc, 0, err)
+        report_path = os.path.join(self.cwd, ".eaos", tid, "artifacts", "final-report.md")
+        with open(report_path) as f:
+            content = f.read()
+        self.assertIn("Conditional — needs human confirmation", content)
+        self.assertIn("AC-2", content)
+        self.assertIn("implementation complete; release blocked pending: AC-2", content)
+
+    def test_failed_criterion_still_blocks_report(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "fail",
+            "--evidence", "e1")
+        rc, out, err = run(self.cwd, "report", tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("REFUSED", out)
+
+
+class TestSaveStateAtomicity(EaosTestCase):
+    def test_state_write_then_read_valid_and_no_leftover_tmp(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+
+        state_file = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_file) as f:
+            state = json.load(f)
+        self.assertEqual(state["id"], tid)
+        self.assertEqual(state["phase"], "DESIGN")
+
+        entries = os.listdir(os.path.join(self.cwd, ".eaos", tid))
+        self.assertFalse(any(e.startswith("state.json.tmp") for e in entries),
+                          f"leftover tmp file(s): {entries}")
+
+
 if __name__ == "__main__":
     unittest.main()

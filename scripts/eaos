@@ -68,13 +68,39 @@ def load_state(task_id):
         return json.load(f)
 
 def save_state(task_id, state):
-    with open(state_path(task_id), "w", encoding="utf-8") as f:
+    # atomic: write to a sibling temp file, then rename over the real one — a crash
+    # mid-write leaves the previous-valid state.json, never a partial/corrupt one.
+    p = state_path(task_id)
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
         f.write("\n")
+    os.replace(tmp, p)
 
 def warroom_log(task_id, line):
     with open(warroom_path(task_id), "a", encoding="utf-8") as f:
         f.write(line if line.endswith("\n") else line + "\n")
+
+def runs_path():
+    return os.path.join(eaos_dir(), "runs.jsonl")
+
+def read_episode_lines_for_task(task_id):
+    p = runs_path()
+    lines = []
+    if not os.path.isfile(p):
+        return lines
+    with open(p, encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("task") == task_id:
+                lines.append(obj)
+    return lines
 
 # ---------- init ----------
 
@@ -139,6 +165,8 @@ def cmd_task_new(args):
     state = {
         "id": task_id,
         "title": args.title,
+        "kind": args.kind,
+        "playbook": args.playbook,
         "created": ts,
         "status": "active",
         "phase": "INTAKE",
@@ -292,14 +320,19 @@ def cmd_gate(args):
 
 # ---------- verify ----------
 
+# Criterion states beyond pass/fail: honest deferral rather than a fantasy pass
+# (spec §11; evidence: T17-09 AC2). These never block --require, only mark it conditional.
+CONDITIONAL_VERDICTS = ("blocked", "not_reproducible", "manual_confirmation_required")
+
 def require_status(state):
     criteria = state.get("criteria", {})
     if not criteria:
-        return False, "zero criteria recorded"
-    failed = [k for k, v in criteria.items() if v["verdict"] != "pass"]
+        return False, "zero criteria recorded", []
+    failed = [k for k, v in criteria.items() if v["verdict"] == "fail"]
     if failed:
-        return False, f"failed criteria: {', '.join(failed)}"
-    return True, None
+        return False, f"failed criteria: {', '.join(failed)}", []
+    conditional = [k for k, v in criteria.items() if v["verdict"] in CONDITIONAL_VERDICTS]
+    return True, None, conditional
 
 def print_criteria_table(state):
     criteria = state.get("criteria", {})
@@ -312,17 +345,20 @@ def cmd_verify(args):
     state = load_state(args.id)
 
     if args.require:
-        ok, reason = require_status(state)
+        ok, reason, conditional = require_status(state)
         print_criteria_table(state)
         if not ok:
             print(f"UNVERIFIED: {reason}")
             sys.exit(1)
-        print("OK: all recorded criteria pass")
+        if conditional:
+            print(f"CONDITIONAL: needs human confirmation — {', '.join(conditional)}")
+        else:
+            print("OK: all recorded criteria pass")
         sys.exit(0)
 
     if not args.criterion or not args.verdict:
-        die("verify: need --criterion NAME --verdict pass|fail --evidence '...', "
-            "or --require", 2)
+        die("verify: need --criterion NAME --verdict pass|fail|blocked|not_reproducible|"
+            "manual_confirmation_required --evidence '...', or --require", 2)
     if not args.evidence:
         die("verify: --evidence is mandatory with --verdict (an unevidenced pass is "
             "exactly the fantasy this tool exists to kill)", 2)
@@ -349,6 +385,8 @@ def cmd_status(args):
     print(f"Status: {state['status']}   Phase: {state['phase']}")
     history = " -> ".join(h["phase"] for h in state["phase_history"])
     print(f"Phase history: {history}")
+    if read_episode_lines_for_task(state["id"]):
+        print("episode: closed")
 
     spawns = state["spawns"]
     print(f"Spawns: {spawns['count']}/{cfg['max_agent_spawns_per_task']}")
@@ -379,7 +417,7 @@ def cmd_status(args):
 
 def cmd_report(args):
     state = load_state(args.id)
-    ok, reason = require_status(state)
+    ok, reason, conditional = require_status(state)
     if not ok:
         print(f"REFUSED: verify --require not satisfied — {reason}")
         sys.exit(1)
@@ -412,6 +450,13 @@ def cmd_report(args):
         lines.append(f"| {k} | {v['verdict']} | {v['evidence']} |")
     lines.append("")
 
+    if conditional:
+        lines.append("### Conditional — needs human confirmation")
+        for k in conditional:
+            v = state["criteria"][k]
+            lines.append(f"- {k}: {v['verdict']} — {v['evidence']}")
+        lines.append("")
+
     ledger = state["loopbacks"]["ledger"]
     if ledger:
         lines.append("## Attempt ledger")
@@ -425,10 +470,105 @@ def cmd_report(args):
             lines.append(f"- artifacts/{name}")
     lines.append("")
 
+    if conditional:
+        lines.append(f"implementation complete; release blocked pending: "
+                      f"{', '.join(conditional)}")
+        lines.append("")
+
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
     print(f"OK: report skeleton written to {out_path}")
+    sys.exit(0)
+
+# ---------- episode ----------
+
+def cmd_episode_close(args):
+    state = load_state(args.id)
+    existing = read_episode_lines_for_task(args.id)
+    if existing and not args.amend:
+        die("already closed — use --amend to append a corrected line", 1)
+
+    ts = now_iso()
+    created = state.get("created")
+
+    phases = [h["phase"] for h in state.get("phase_history", [])]
+
+    agents = []
+    for s in state.get("spawns", {}).get("log", []):
+        name = s.get("agent")
+        if name not in agents:
+            agents.append(name)
+
+    loopbacks = state.get("loopbacks", {})
+
+    gates_summary = {}
+    for phase, checks in state.get("gates", {}).items():
+        passed = sum(1 for r in checks.values() if r["result"] == "pass")
+        failed = sum(1 for r in checks.values() if r["result"] != "pass")
+        gates_summary[phase] = {"pass": passed, "fail": failed}
+
+    criteria_state = state.get("criteria", {})
+    criteria = {k: v["verdict"] for k, v in criteria_state.items()}
+    criteria_total = len(criteria)
+    criteria_verified = sum(1 for v in criteria.values() if v in ("pass", "verified"))
+    has_fail = any(v == "fail" for v in criteria.values())
+
+    if criteria_total == 0 or has_fail:
+        verdict = "unverified"
+    elif criteria_verified == criteria_total:
+        verdict = "verified"
+    else:
+        verdict = "partial"
+
+    wall_seconds = None
+    try:
+        wall_seconds = (datetime.datetime.fromisoformat(ts) -
+                         datetime.datetime.fromisoformat(created)).total_seconds()
+    except (TypeError, ValueError):
+        wall_seconds = None  # created missing/unparseable — never guess
+
+    close_revision = 1
+    if existing:
+        close_revision = max(e.get("close_revision", 1) for e in existing) + 1
+
+    episode = {
+        "schema_version": 1,
+        "task": args.id,
+        "title": state.get("title"),
+        "kind": state.get("kind"),
+        "playbook": state.get("playbook"),
+        "created": created,
+        "closed": ts,
+        "phases": phases,
+        "spawns": state.get("spawns", {}).get("count", 0),
+        "agents": agents,
+        "loopbacks_total": loopbacks.get("total", 0),
+        "loopbacks_by_issue": loopbacks.get("by_issue", {}),
+        "gates": gates_summary,
+        "criteria": criteria,
+        "criteria_verified": criteria_verified,
+        "criteria_total": criteria_total,
+        "verdict": verdict,
+        "tokens": "unavailable",  # the CLI cannot see host token counts; never infer
+        "wall_seconds": wall_seconds,
+        "close_revision": close_revision,
+    }
+
+    # single os.write append of one line — atomic enough for local single-line appends.
+    line = (json.dumps(episode) + "\n").encode("utf-8")
+    fd = os.open(runs_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+    state["status"] = "closed"
+    save_state(args.id, state)
+
+    warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
+                          f"close_revision={close_revision}")
+    print(f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})")
     sys.exit(0)
 
 # ---------- argparse wiring ----------
@@ -447,6 +587,8 @@ def build_parser():
     task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
     p_task_new = task_sub.add_parser("new")
     p_task_new.add_argument("title")
+    p_task_new.add_argument("--kind", default=None)
+    p_task_new.add_argument("--playbook", default=None)
     p_task_new.set_defaults(func=cmd_task_new)
 
     p_append = sub.add_parser("append")
@@ -489,7 +631,8 @@ def build_parser():
     p_verify = sub.add_parser("verify")
     p_verify.add_argument("id")
     p_verify.add_argument("--criterion", default=None)
-    p_verify.add_argument("--verdict", choices=["pass", "fail"], default=None)
+    p_verify.add_argument("--verdict", default=None, choices=[
+        "pass", "fail", "blocked", "not_reproducible", "manual_confirmation_required"])
     p_verify.add_argument("--evidence", default=None)
     p_verify.add_argument("--require", action="store_true")
     p_verify.set_defaults(func=cmd_verify)
@@ -502,6 +645,13 @@ def build_parser():
     p_report.add_argument("id")
     p_report.set_defaults(func=cmd_report)
 
+    p_episode = sub.add_parser("episode")
+    episode_sub = p_episode.add_subparsers(dest="episode_cmd", required=True)
+    p_episode_close = episode_sub.add_parser("close")
+    p_episode_close.add_argument("id")
+    p_episode_close.add_argument("--amend", action="store_true")
+    p_episode_close.set_defaults(func=cmd_episode_close)
+
     return p
 
 def main():
@@ -509,6 +659,8 @@ def main():
     args = parser.parse_args()
     if args.cmd == "task" and args.task_cmd != "new":
         die("usage: eaos task new \"<title>\"", 2)
+    if args.cmd == "episode" and args.episode_cmd != "close":
+        die("usage: eaos episode close <task-id> [--amend]", 2)
     try:
         args.func(args)
     except SystemExit:
