@@ -63,7 +63,10 @@ chatter stay on disk.
 ## Step 0 — Set up the run
 
 ```bash
-# With the eaos CLI: eaos init (idempotent) then eaos task new "<title>" prints the id N.
+# With the eaos CLI: eaos init (idempotent) then
+#   eaos task new "<title>" --kind <kind> --stakes <toy|internal|production>
+# prints the id N (kind/stakes recorded once INTAKE classifies them — update via re-run
+# is unnecessary; pass what fast-triage already knows, refine in the spec).
 # No-CLI fallback — same effect via raw bash:
 mkdir -p .eaos/memory/decisions .eaos/memory/patterns .eaos/memory/lessons .eaos/memory/codebase
 N=$(printf "T-%03d" $(( $(ls .eaos 2>/dev/null | grep -c '^T-') + 1 )))
