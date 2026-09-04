@@ -2,8 +2,10 @@
 
 EAOS adds real ceremony (personas, war room, gates, loops) on top of plain Claude Code. That
 overhead is only justified if it produces measurably better outcomes. This is the protocol for
-checking that honestly, instead of assuming it. Nothing in this repo has run this protocol yet
-— it's the pre-registered design, so results can't be cherry-picked after the fact.
+checking that honestly, instead of assuming it. The protocol was pre-registered BEFORE the
+first runs (so results can't be cherry-picked); results now live in `evals/results/` —
+run 1 (investigation class) and run 2 (build class, with hidden checks committed at
+`e051c32` before either arm executed). Run 2 failed the cost bar honestly; see the files.
 
 ## Design
 

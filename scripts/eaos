@@ -8,7 +8,9 @@ State lives under ./.eaos/ in the target project (cwd). Two files per task:
   warroom.md   — human-readable, append-only log (byproduct, not parsed back)
   state.json   — machine state: source of truth for every command below
 
-Exit codes: 0 = allowed/ok, 1 = ceiling hit / gate unmet / invalid, 2 = usage error.
+Exit codes: 0 = allowed/ok, 1 = ceiling hit / gate unmet / invalid / task BLOCKED,
+2 = usage error, 3 = CONDITIONAL (verify --require only: no failed criteria, but at
+least one conditional criterion remains — see §11 and the criterion-state comment below).
 stdlib only (json/argparse/os/re/datetime/hashlib/time/contextlib). No third-party
 deps, ever.
 
@@ -38,11 +40,26 @@ DEFAULT_CONFIG = {
 STATE_SCHEMA_VERSION = 2
 IDEMPOTENCY_KEEP = 200
 
-VERIFY_VERDICTS = ("pass", "fail", "blocked", "not_reproducible",
-                    "manual_confirmation_required")
-# Criterion states beyond pass/fail: honest deferral rather than a fantasy pass
-# (spec §11; evidence: T17-09 AC2). These never block --require, only mark it conditional.
+# Canonical criterion-verdict enum (spec §11). "pass"/"fail" are accepted as INPUT
+# aliases only (legacy callers, --verdict and --bulk lines) — they are canonicalized to
+# verified/failed before anything is persisted; state.json never stores the alias form.
+CANONICAL_VERDICTS = ("verified", "failed", "blocked", "not_reproducible",
+                       "manual_confirmation_required")
+VERDICT_ALIASES = {"pass": "verified", "fail": "failed"}
+VERIFY_VERDICTS = CANONICAL_VERDICTS + tuple(VERDICT_ALIASES)  # accepted CLI/bulk input
+
+def canonicalize_verdict(v):
+    return VERDICT_ALIASES.get(v, v)
+
+# Criterion states beyond verified/failed: honest deferral rather than a fantasy pass
+# (spec §11; evidence: T17-09 AC2). These never block --require with exit 1, only mark
+# it CONDITIONAL (exit 3) — but manual_confirmation_required and blocked/not_reproducible
+# carry different honesty semantics (fix 2): the former means the implementation may be
+# complete and release is pending a human's confirmation; the latter two mean the
+# implementation itself is NOT claimed complete — the criterion is unresolved.
 CONDITIONAL_VERDICTS = ("blocked", "not_reproducible", "manual_confirmation_required")
+UNRESOLVED_VERDICTS = ("blocked", "not_reproducible")
+MANUAL_CONFIRMATION_VERDICT = "manual_confirmation_required"
 
 LOOPBACK_CLASSES = ("recoverable", "transient", "hard_blocker")
 
@@ -93,6 +110,13 @@ def migrate_state(state):
         state.setdefault("fingerprint", None)
         state.setdefault("idempotency_keys", [])
         state["schema_version"] = 2
+    # Canonicalize legacy pass/fail criterion verdicts (fix 3) regardless of
+    # schema_version — a state file may carry them even under v2 if it was written
+    # before this canonicalization existed. In-memory only until the next save_state().
+    for v in state.get("criteria", {}).values():
+        verdict = v.get("verdict")
+        if verdict in VERDICT_ALIASES:
+            v["verdict"] = VERDICT_ALIASES[verdict]
     return state
 
 def load_state(task_id):
@@ -197,6 +221,17 @@ def task_lock(task_id):
     finally:
         _release_lock(p)
 
+# ---------- hard-blocker gate (fix 1 / spec §6) ----------
+# A hard_blocker loopback transitions the task to status="blocked" (see cmd_loopback).
+# Every mutating verb except status/audit/report/episode close/loopback must refuse to
+# run against a blocked task — only a human, via `phase ... --unblock`, can resume it.
+
+def ensure_not_blocked(state, task_id):
+    blocked = state.get("blocked") or {}
+    reason = blocked.get("reason", "unknown")
+    die(f"task is BLOCKED ({reason}) — resolve via human gate; use "
+        f"`eaos phase {task_id} <PHASE> --unblock --reason '<r>'` to resume", 1)
+
 @contextlib.contextmanager
 def project_lock():
     os.makedirs(eaos_dir(), exist_ok=True)
@@ -211,6 +246,24 @@ def project_lock():
 # Only successful (exit-0) mutations are cached: a rejected/ceiling-hit call never
 # touched state, so replaying it with the same args is already naturally idempotent —
 # no key bookkeeping needed for the failure paths.
+#
+# Idempotency map (spec §11 — every mutating verb accepts or generates an idempotency
+# key; BY-CONSTRUCTION means a replay is already safe without a key because the
+# operation is a deterministic overwrite/no-op, not because it silently double-mutates):
+#   init            BY-CONSTRUCTION — no-ops when config.json already exists
+#   task new        fingerprint-guarded (exact match blocks, overlap warns); a true
+#                   per-call idempotency key is DEFERRED — see the fix-4 comment on
+#                   compute_fingerprint for why structured intake can't fully dedupe yet
+#   append          KEYED (--idempotency-key)
+#   phase           KEYED (--idempotency-key)
+#   spawn           KEYED (--idempotency-key)
+#   loopback        KEYED (--idempotency-key)
+#   gate            KEYED (--idempotency-key)
+#   verify          KEYED (--idempotency-key; single-criterion and --bulk both)
+#   episode close   KEYED (--idempotency-key) + --amend for a genuine, intentional re-close
+#   report          BY-CONSTRUCTION — deterministic overwrite of the same artifact path
+#                   from the same state; task-locked while writing, no key needed
+#   status / audit  read-only, not mutating — no idempotency concern
 
 def idempotency_lookup(state, key):
     if not key:
@@ -288,9 +341,28 @@ def all_task_ids():
         return []
     return sorted(n for n in os.listdir(d) if re.match(r"^T-\d+$", n))
 
-def compute_fingerprint(parent, title):
-    tokens = sorted(re.findall(r"\w+", title.lower()))
-    normalized = (parent or "") + "|" + " ".join(tokens)
+def _tokenize(text):
+    return sorted(re.findall(r"\w+", (text or "").lower()))
+
+def compute_fingerprint(parent, kind, title, paths=None, criteria=None, outcome=None):
+    """Deterministic duplicate fingerprint (spec §11: {parent, kind, target paths/
+    symbols, criteria ids, outcome}). Honest limitation: this catches only WORDING
+    overlap (same tokens/paths/criteria) — a semantic duplicate phrased differently
+    ("fix the flaky login test" vs "stabilize sign-in spec") is invisible to it. That
+    needs structured intake fields captured upstream of task creation, which does not
+    exist yet (fix 4 note; task-new idempotency key is deferred for the same reason)."""
+    title_tokens = _tokenize(title)
+    path_list = sorted(p.strip() for p in (paths or []) if p.strip())
+    criteria_list = sorted(c.strip() for c in (criteria or []) if c.strip())
+    outcome_tokens = _tokenize(outcome)
+    normalized = "|".join([
+        parent or "",
+        kind or "",
+        " ".join(title_tokens),
+        " ".join(path_list),
+        " ".join(criteria_list),
+        " ".join(outcome_tokens),
+    ])
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 def find_duplicate_task(fingerprint):
@@ -303,13 +375,50 @@ def find_duplicate_task(fingerprint):
             return tid
     return None
 
+def overlap_token_set(title, paths, criteria):
+    tokens = set(_tokenize(title))
+    tokens |= set(p.strip() for p in (paths or []) if p.strip())
+    tokens |= set(c.strip() for c in (criteria or []) if c.strip())
+    return tokens
+
+def jaccard(a, b):
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+def find_overlap_warnings(parent, title, paths, criteria):
+    """Best-effort duplicate signal (fix 4): token-set Jaccard on title ∪ paths ∪
+    criteria against every non-closed task under the same parent (or, if parent is
+    None, every non-closed top-level task). Advisory only — never blocks."""
+    new_tokens = overlap_token_set(title, paths, criteria)
+    warnings = []
+    for tid in all_task_ids():
+        try:
+            st = load_state(tid)
+        except SystemExit:
+            continue
+        if st.get("status") == "closed" or st.get("parent") != parent:
+            continue
+        other_tokens = overlap_token_set(st.get("title", ""), st.get("paths", []),
+                                          st.get("criteria_ids", []))
+        score = jaccard(new_tokens, other_tokens)
+        if score >= 0.5:
+            warnings.append((tid, score))
+    return sorted(warnings)
+
 def cmd_task_new(args):
     if args.parent:
         task_dir(args.parent)  # validates existence; dies with usage error if missing
     if args.allow_duplicate and not args.reason:
         die("task new: --allow-duplicate requires --reason", 2)
 
-    fp = compute_fingerprint(args.parent, args.title)
+    paths = [p.strip() for p in (args.paths or "").split(",") if p.strip()]
+    criteria_ids = [c.strip() for c in (args.criteria or "").split(",") if c.strip()]
+    outcome = args.outcome
+
+    fp = compute_fingerprint(args.parent, args.kind, args.title, paths, criteria_ids,
+                              outcome)
 
     with project_lock():
         if not args.allow_duplicate:
@@ -317,6 +426,10 @@ def cmd_task_new(args):
             if dup:
                 die(f"DUPLICATE: fingerprint matches {dup} — resume it instead (or pass "
                     f"--allow-duplicate --reason '<why>')", 1)
+
+        # Overlap warning (fix 4): advisory only, never blocks — see find_overlap_warnings
+        # for the honest limitation (wording overlap only, no semantic matching).
+        warnings = find_overlap_warnings(args.parent, args.title, paths, criteria_ids)
 
         task_id, path = allocate_task_id()
         os.makedirs(os.path.join(path, "artifacts"), exist_ok=True)
@@ -331,9 +444,14 @@ def cmd_task_new(args):
             "stakes": args.stakes,
             "playbook": args.playbook,
             "parent": args.parent,
+            "paths": paths,
+            "criteria_ids": criteria_ids,
+            "outcome": outcome,
             "fingerprint": fp,
             "created": ts,
             "status": "active",
+            "blocked": None,
+            "unblocks": [],
             "phase": "INTAKE",
             "phase_history": [{"phase": "INTAKE", "at": ts}],
             "next_msg_num": 1,
@@ -342,8 +460,13 @@ def cmd_task_new(args):
             "loopbacks": {"total": 0, "by_issue": {}, "ledger": []},
             "gates": {},
             "criteria": {},
+            "overlap_warnings": [],
             "idempotency_keys": [],
         }
+        for tid, score in warnings:
+            print(f"WARN: overlaps {tid} (jaccard {score:.2f}) — possible duplicate; "
+                  f"resume it or continue")
+            state["overlap_warnings"].append({"task": tid, "jaccard": round(score, 2)})
         if args.allow_duplicate and args.reason:
             state["duplicate_override_reason"] = args.reason
         save_state(task_id, state)
@@ -371,6 +494,8 @@ def cmd_append(args):
         if cached:
             print(cached["output"])
             sys.exit(0)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
 
         to_list = [t.strip() for t in args.to.split(",") if t.strip()]
         msg_id = f"msg-{state['next_msg_num']:03d}"
@@ -408,15 +533,27 @@ def cmd_phase(args):
         if cached:
             print(cached["output"])
             sys.exit(0)
+        if state.get("status") == "blocked" and not args.unblock:
+            ensure_not_blocked(state, args.id)
+
+        ts = now_iso()
+        unblock_note = ""
+        if args.unblock:
+            if not args.reason:
+                die("phase --unblock requires --reason", 2)
+            entry = {"reason": args.reason, "at": ts, "cleared": state.get("blocked")}
+            state.setdefault("unblocks", []).append(entry)
+            state["status"] = "active"
+            state["blocked"] = None
+            unblock_note = f" UNBLOCKED reason={args.reason}"
 
         old = state.get("phase")
-        ts = now_iso()
         state["phase"] = args.phase
         state["phase_history"].append({"phase": args.phase, "at": ts})
-        out = f"OK: phase {old} -> {args.phase}"
+        out = f"OK: phase {old} -> {args.phase}" + (" (unblocked)" if args.unblock else "")
         idempotency_record(state, args.idempotency_key, out)
         save_state(args.id, state)
-        warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}\n")
+        warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}{unblock_note}\n")
     print(out)
     sys.exit(0)
 
@@ -469,6 +606,8 @@ def cmd_spawn(args):
             if cached:
                 print(cached["output"])
                 sys.exit(0)
+            if state.get("status") == "blocked":
+                ensure_not_blocked(state, args.id)
 
             # Check BEFORE persisting: a rejected spawn never happened, so it must not
             # consume a slot — otherwise one rejection would lock the budget out
@@ -535,6 +674,10 @@ def cmd_loopback(args):
         total_n = lb["total"]
 
         if lb_class == "hard_blocker":
+            # Spec §6 retry law: hard_blocker never loops — it transitions the task to
+            # BLOCKED (a human gate), not just a printed warning (fix 1).
+            state["status"] = "blocked"
+            state["blocked"] = {"reason": args.attempt, "issue": args.issue, "at": ts}
             save_state(args.id, state)
             warroom_log(args.id, f"[{ts}] LOOPBACK edge={args.edge} issue={args.issue} "
                                   f"class=hard_blocker attempt={args.attempt} "
@@ -594,6 +737,8 @@ def cmd_gate(args):
         if cached:
             print(cached["output"])
             sys.exit(0)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
 
         gates = state.setdefault("gates", {})
         phase_gates = gates.setdefault(args.phase, {})
@@ -611,14 +756,21 @@ def cmd_gate(args):
 # ---------- verify ----------
 
 def require_status(state):
+    """Returns (ok, reason, manual_confirmation_keys, unresolved_keys).
+    ok=False means verify --require must exit 1 (a failed criterion, or none recorded).
+    ok=True with either list non-empty means CONDITIONAL (exit 3): manual_confirmation_
+    keys are criteria whose implementation may be complete but await human confirmation;
+    unresolved_keys (blocked/not_reproducible) mean the implementation itself is NOT
+    claimed complete for that criterion (fix 2 — honest conditional semantics)."""
     criteria = state.get("criteria", {})
     if not criteria:
-        return False, "zero criteria recorded", []
-    failed = [k for k, v in criteria.items() if v["verdict"] == "fail"]
+        return False, "zero criteria recorded", [], []
+    failed = [k for k, v in criteria.items() if v["verdict"] == "failed"]
     if failed:
-        return False, f"failed criteria: {', '.join(failed)}", []
-    conditional = [k for k, v in criteria.items() if v["verdict"] in CONDITIONAL_VERDICTS]
-    return True, None, conditional
+        return False, f"failed criteria: {', '.join(failed)}", [], []
+    manual = [k for k, v in criteria.items() if v["verdict"] == MANUAL_CONFIRMATION_VERDICT]
+    unresolved = [k for k, v in criteria.items() if v["verdict"] in UNRESOLVED_VERDICTS]
+    return True, None, manual, unresolved
 
 def print_criteria_table(state):
     criteria = state.get("criteria", {})
@@ -628,6 +780,10 @@ def print_criteria_table(state):
         print(f"| {k} | {v['verdict']} | {v['evidence']} |")
 
 def parse_bulk_verify_lines(text):
+    """Each line: CRITERION | VERDICT | EVIDENCE. VERDICT accepts the canonical enum
+    (verified|failed|blocked|not_reproducible|manual_confirmation_required) plus the
+    legacy pass/fail aliases (fix 3) — aliases are canonicalized here before being
+    returned, so callers only ever see/persist canonical values."""
     parsed = []
     errors = []
     for i, raw in enumerate(text.splitlines(), start=1):
@@ -642,21 +798,29 @@ def parse_bulk_verify_lines(text):
         if verdict not in VERIFY_VERDICTS:
             errors.append((i, raw))
             continue
-        parsed.append((criterion, verdict, evidence))
+        parsed.append((criterion, canonicalize_verdict(verdict), evidence))
     return parsed, errors
 
 def cmd_verify(args):
     if args.require:
         state = load_state(args.id)
-        ok, reason, conditional = require_status(state)
+        ok, reason, manual, unresolved = require_status(state)
         print_criteria_table(state)
         if not ok:
             print(f"UNVERIFIED: {reason}")
             sys.exit(1)
-        if conditional:
-            print(f"CONDITIONAL: needs human confirmation — {', '.join(conditional)}")
-        else:
-            print("OK: all recorded criteria pass")
+        if manual or unresolved:
+            # fix 2: name which class each conditional criterion belongs to — the two
+            # classes carry different honesty semantics, never collapse them together.
+            for k in manual:
+                print(f"CONDITIONAL: {k} (manual_confirmation_required) — implementation "
+                      f"may be complete; release pending human confirmation")
+            for k in unresolved:
+                verdict = state["criteria"][k]["verdict"]
+                print(f"CONDITIONAL: {k} ({verdict}) — implementation NOT claimed "
+                      f"complete; criterion unresolved")
+            sys.exit(3)
+        print("OK: all recorded criteria pass")
         sys.exit(0)
 
     if args.bulk:
@@ -669,19 +833,31 @@ def cmd_verify(args):
             sys.exit(2)
         with task_lock(args.id):
             state = load_state(args.id)
+            # fix 5: one idempotency key covers the whole batch — a replay returns the
+            # cached output and appends nothing a second time.
+            cached = idempotency_lookup(state, args.idempotency_key)
+            if cached:
+                print(cached["output"])
+                sys.exit(0)
+            if state.get("status") == "blocked":
+                ensure_not_blocked(state, args.id)
+
             ts = now_iso()
             for criterion, verdict, evidence in parsed:
                 state.setdefault("criteria", {})[criterion] = {
                     "verdict": verdict, "evidence": evidence, "at": ts}
                 warroom_log(args.id, f"[{ts}] VERIFY criterion={criterion} "
                                       f"verdict={verdict} evidence={evidence}")
+            out = f"OK: {len(parsed)} criteria recorded via --bulk"
+            idempotency_record(state, args.idempotency_key, out)
             save_state(args.id, state)
-        print(f"OK: {len(parsed)} criteria recorded via --bulk")
+        print(out)
         sys.exit(0)
 
     if not args.criterion or not args.verdict:
-        die("verify: need --criterion NAME --verdict pass|fail|blocked|not_reproducible|"
-            "manual_confirmation_required --evidence '...', or --require, or --bulk", 2)
+        die("verify: need --criterion NAME --verdict verified|failed|blocked|"
+            "not_reproducible|manual_confirmation_required (aliases pass->verified, "
+            "fail->failed accepted) --evidence '...', or --require, or --bulk", 2)
     if not args.evidence:
         die("verify: --evidence is mandatory with --verdict (an unevidenced pass is "
             "exactly the fantasy this tool exists to kill)", 2)
@@ -692,16 +868,19 @@ def cmd_verify(args):
         if cached:
             print(cached["output"])
             sys.exit(0)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
 
+        verdict = canonicalize_verdict(args.verdict)
         ts = now_iso()
         state.setdefault("criteria", {})[args.criterion] = {
-            "verdict": args.verdict, "evidence": args.evidence, "at": ts,
+            "verdict": verdict, "evidence": args.evidence, "at": ts,
         }
-        out = f"OK: {args.criterion} = {args.verdict}"
+        out = f"OK: {args.criterion} = {verdict}"
         idempotency_record(state, args.idempotency_key, out)
         save_state(args.id, state)
         warroom_log(args.id, f"[{ts}] VERIFY criterion={args.criterion} "
-                              f"verdict={args.verdict} evidence={args.evidence}")
+                              f"verdict={verdict} evidence={args.evidence}")
     print(out)
     sys.exit(0)
 
@@ -715,6 +894,9 @@ def cmd_status(args):
 
     print(f"Task: {state['id']} — {state['title']}")
     print(f"Status: {state['status']}   Phase: {state['phase']}")
+    if state.get("status") == "blocked" and state.get("blocked"):
+        b = state["blocked"]
+        print(f"  BLOCKED: issue={b.get('issue')} reason={b.get('reason')} at={b.get('at')}")
     history = " -> ".join(h["phase"] for h in state["phase_history"])
     print(f"Phase history: {history}")
     if read_episode_lines_for_task(state["id"]):
@@ -748,67 +930,93 @@ def cmd_status(args):
 # ---------- report ----------
 
 def cmd_report(args):
-    state = load_state(args.id)
-    ok, reason, conditional = require_status(state)
-    if not ok:
-        print(f"REFUSED: verify --require not satisfied — {reason}")
-        sys.exit(1)
+    # fix 5: report is idempotent BY CONSTRUCTION — it deterministically overwrites the
+    # same artifacts/final-report.md path from the current state, so no idempotency key
+    # is needed (re-running it with unchanged state reproduces the same file byte-for-
+    # byte). It still takes the task lock while writing so a concurrent mutation can't
+    # interleave with the read-state-then-write-file sequence.
+    with task_lock(args.id):
+        state = load_state(args.id)
+        ok, reason, manual, unresolved = require_status(state)
+        if not ok:
+            print(f"REFUSED: verify --require not satisfied — {reason}")
+            sys.exit(1)
 
-    d = task_dir(args.id)
-    artifacts_dir = os.path.join(d, "artifacts")
-    os.makedirs(artifacts_dir, exist_ok=True)
-    out_path = os.path.join(artifacts_dir, "final-report.md")
+        d = task_dir(args.id)
+        artifacts_dir = os.path.join(d, "artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        out_path = os.path.join(artifacts_dir, "final-report.md")
 
-    lines = [f"# Final report skeleton — {state['id']}: {state['title']}", ""]
+        lines = [f"# Final report skeleton — {state['id']}: {state['title']}", ""]
 
-    lines.append("## Phase history")
-    for h in state["phase_history"]:
-        lines.append(f"- {h['phase']} ({h['at']})")
-    lines.append("")
-
-    lines.append("## Decisions")
-    decisions = [m for m in state["messages"] if m["type"] == "DECISION"]
-    if decisions:
-        for m in decisions:
-            lines.append(f"- [{m['id']}] {m['from']}: {m['body']}")
-    else:
-        lines.append("(none recorded)")
-    lines.append("")
-
-    lines.append("## Criteria (DoD table)")
-    lines.append("| Criterion | Verdict | Evidence |")
-    lines.append("|---|---|---|")
-    for k, v in state.get("criteria", {}).items():
-        lines.append(f"| {k} | {v['verdict']} | {v['evidence']} |")
-    lines.append("")
-
-    if conditional:
-        lines.append("### Conditional — needs human confirmation")
-        for k in conditional:
-            v = state["criteria"][k]
-            lines.append(f"- {k}: {v['verdict']} — {v['evidence']}")
+        lines.append("## Phase history")
+        for h in state["phase_history"]:
+            lines.append(f"- {h['phase']} ({h['at']})")
         lines.append("")
 
-    ledger = state["loopbacks"]["ledger"]
-    if ledger:
-        lines.append("## Attempt ledger")
-        for e in ledger:
-            lines.append(f"- issue={e['issue']} edge={e['edge']}: {e['attempt']}")
+        lines.append("## Decisions")
+        decisions = [m for m in state["messages"] if m["type"] == "DECISION"]
+        if decisions:
+            for m in decisions:
+                lines.append(f"- [{m['id']}] {m['from']}: {m['body']}")
+        else:
+            lines.append("(none recorded)")
         lines.append("")
 
-    lines.append("## Artifacts")
-    for name in sorted(os.listdir(artifacts_dir)):
-        if name != "final-report.md":
-            lines.append(f"- artifacts/{name}")
-    lines.append("")
-
-    if conditional:
-        lines.append(f"implementation complete; release blocked pending: "
-                      f"{', '.join(conditional)}")
+        lines.append("## Criteria (DoD table)")
+        lines.append("| Criterion | Verdict | Evidence |")
+        lines.append("|---|---|---|")
+        for k, v in state.get("criteria", {}).items():
+            lines.append(f"| {k} | {v['verdict']} | {v['evidence']} |")
         lines.append("")
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        # fix 2: manual_confirmation_required and blocked/not_reproducible get separate
+        # subsections — they carry different honesty semantics and must never be
+        # collapsed into one "conditional" bucket.
+        if manual:
+            lines.append("### Pending manual confirmation")
+            for k in manual:
+                v = state["criteria"][k]
+                lines.append(f"- {k}: {v['verdict']} — {v['evidence']}")
+            lines.append("")
+
+        if unresolved:
+            lines.append("### Unresolved (blocked / not reproducible)")
+            for k in unresolved:
+                v = state["criteria"][k]
+                lines.append(f"- {k}: {v['verdict']} — {v['evidence']}")
+            lines.append("")
+
+        ledger = state["loopbacks"]["ledger"]
+        if ledger:
+            lines.append("## Attempt ledger")
+            for e in ledger:
+                lines.append(f"- issue={e['issue']} edge={e['edge']}: {e['attempt']}")
+            lines.append("")
+
+        lines.append("## Artifacts")
+        for name in sorted(os.listdir(artifacts_dir)):
+            if name != "final-report.md":
+                lines.append(f"- artifacts/{name}")
+        lines.append("")
+
+        # fix 2: never emit "implementation complete" when a blocked/not_reproducible
+        # criterion exists — that phrase is reserved for the all-verified or
+        # manual-confirmation-only cases (law 7: no unconditional completion claim while
+        # required criteria remain unverified).
+        if unresolved:
+            unresolved_desc = "; ".join(
+                f"{k} ({state['criteria'][k]['verdict']})" for k in unresolved)
+            lines.append(f"Conditional result — NOT claiming implementation complete. "
+                          f"Unresolved: {unresolved_desc}")
+            lines.append("")
+        elif manual:
+            lines.append(f"implementation complete; release pending manual confirmation "
+                          f"of: {', '.join(manual)}")
+            lines.append("")
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
 
     print(f"OK: report skeleton written to {out_path}")
     sys.exit(0)
@@ -850,15 +1058,26 @@ def cmd_episode_close(args):
             criteria_state = state.get("criteria", {})
             criteria = {k: v["verdict"] for k, v in criteria_state.items()}
             criteria_total = len(criteria)
-            criteria_verified = sum(1 for v in criteria.values() if v in ("pass", "verified"))
-            has_fail = any(v == "fail" for v in criteria.values())
+            criteria_verified = sum(1 for v in criteria.values() if v == "verified")
+            has_fail = any(v == "failed" for v in criteria.values())
+            has_unresolved = any(v in UNRESOLVED_VERDICTS for v in criteria.values())
+            has_manual = any(v == MANUAL_CONFIRMATION_VERDICT for v in criteria.values())
 
+            # fix 2: verdict enum expanded beyond verified/partial/unverified —
+            # conditional-manual is distinguished from partial because a
+            # manual_confirmation_required-only result may still be implementation-
+            # complete (release just needs a human's sign-off), while partial
+            # (any blocked/not_reproducible, no fails) means it is not.
             if criteria_total == 0 or has_fail:
                 verdict = "unverified"
             elif criteria_verified == criteria_total:
                 verdict = "verified"
-            else:
+            elif has_unresolved:
                 verdict = "partial"
+            elif has_manual:
+                verdict = "conditional-manual"
+            else:
+                verdict = "unverified"  # unreachable with the canonical enum; safe fallback
 
             wall_seconds = None
             try:
@@ -997,11 +1216,30 @@ def cmd_audit(args):
         g_ok = isinstance(rev, int) and rev >= 1
     add("revision_present", g_ok, f"schema_version={sv} revision={rev}")
 
-    # (h) criteria contain verdict values outside the allowed enum
+    # (h) criteria contain verdict values outside the canonical enum. Persisted state
+    # must always be canonical (verified/failed/blocked/not_reproducible/
+    # manual_confirmation_required) — pass/fail aliases are input-only (fix 3) and must
+    # never survive to state.json, so this checks against CANONICAL_VERDICTS, not the
+    # alias-inclusive VERIFY_VERDICTS accepted at the CLI boundary.
     bad_verdicts = [k for k, v in state.get("criteria", {}).items()
-                     if v.get("verdict") not in VERIFY_VERDICTS]
+                     if v.get("verdict") not in CANONICAL_VERDICTS]
     add("criteria_verdict_enum", not bad_verdicts,
         f"bad={bad_verdicts}" if bad_verdicts else "none")
+
+    # (i) fix 1: a hard_blocker ledger entry implies the task should have transitioned
+    # to status=blocked (see cmd_loopback) — status=active with such an entry is a
+    # discrepancy (e.g. a state file written before this fix, or a bug). Likewise
+    # status=blocked with no "blocked" record is internally inconsistent.
+    ledger_all = state.get("loopbacks", {}).get("ledger", [])
+    has_hard_blocker_entry = any(e.get("class") == "hard_blocker" for e in ledger_all)
+    status = state.get("status")
+    i_bad = []
+    if has_hard_blocker_entry and status == "active":
+        i_bad.append("hard_blocker ledger entry present while status=active")
+    if status == "blocked" and not state.get("blocked"):
+        i_bad.append("status=blocked with no blocked record")
+    add("hard_blocker_state_consistency", not i_bad,
+        "; ".join(i_bad) if i_bad else "none")
 
     discrepancies = [c for c in checks if not c["ok"]]
 
@@ -1037,6 +1275,15 @@ def build_parser():
                             choices=["toy", "internal", "production"])
     p_task_new.add_argument("--playbook", default=None)
     p_task_new.add_argument("--parent", default=None)
+    p_task_new.add_argument("--paths", default=None,
+                            help="comma-separated target paths/symbols, used in the "
+                                 "fingerprint and the overlap-warning Jaccard score")
+    p_task_new.add_argument("--criteria", default=None,
+                            help="comma-separated criteria ids (e.g. AC-1,AC-2), used in "
+                                 "the fingerprint and the overlap-warning Jaccard score")
+    p_task_new.add_argument("--outcome", default=None,
+                            help="free-text intended outcome, used in the fingerprint "
+                                 "only (not the overlap-warning score)")
     p_task_new.add_argument("--allow-duplicate", action="store_true", dest="allow_duplicate")
     p_task_new.add_argument("--reason", default=None)
     p_task_new.set_defaults(func=cmd_task_new)
@@ -1056,6 +1303,10 @@ def build_parser():
     p_phase = sub.add_parser("phase")
     p_phase.add_argument("id")
     p_phase.add_argument("phase")
+    p_phase.add_argument("--unblock", action="store_true",
+                         help="clear a BLOCKED status (from a hard_blocker loopback) and "
+                              "record the unblock reason; requires --reason")
+    p_phase.add_argument("--reason", default=None, help="required with --unblock")
     p_phase.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_phase.set_defaults(func=cmd_phase)
 
@@ -1088,7 +1339,11 @@ def build_parser():
     p_verify = sub.add_parser("verify")
     p_verify.add_argument("id")
     p_verify.add_argument("--criterion", default=None)
-    p_verify.add_argument("--verdict", default=None, choices=list(VERIFY_VERDICTS))
+    p_verify.add_argument("--verdict", default=None, choices=list(VERIFY_VERDICTS),
+                          help="canonical: verified|failed|blocked|not_reproducible|"
+                               "manual_confirmation_required. Aliases 'pass'->verified "
+                               "and 'fail'->failed are accepted for compatibility but "
+                               "always persisted as the canonical value (fix 3).")
     p_verify.add_argument("--evidence", default=None)
     p_verify.add_argument("--require", action="store_true")
     p_verify.add_argument("--bulk", action="store_true")

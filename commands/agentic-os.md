@@ -31,8 +31,13 @@ checkout. When present, thread every step below through it — **its exit codes 
 a nonzero `eaos loopback` IS the deadlock/ceiling escalation (stop, hand the human the printed
 ledger — not a suggestion to consider); a nonzero `eaos spawn` means downgrade/drop an agent
 before spawning, not after; a nonzero `eaos gate <id> <phase> --require` blocks the phase
-advance; `eaos verify --require` must pass before STABILIZE completes; and `eaos report`
-refusing means the task is NOT done, full stop. When the CLI is absent, all prose behavior
+advance; `eaos verify --require` must exit 0 (all verified) or 3 (CONDITIONAL) before
+STABILIZE completes — exit 3 means the final report may only make a CONDITIONAL claim
+(manual-confirmation criteria → "release pending confirmation"; blocked/not_reproducible →
+"NOT claiming implementation complete", named unresolved); `eaos report` refusing (exit 1)
+means the task is NOT done, full stop; and a `hard_blocker` loop-back puts the task in
+`status: blocked` — every mutating verb refuses until a human resumes it via
+`eaos phase <id> <PHASE> --unblock --reason '<r>'`. When the CLI is absent, all prose behavior
 below is unchanged — it is the fallback, not a stopgap.
 
 ---

@@ -242,6 +242,23 @@ class TestVerify(EaosTestCase):
         rc, out, err = run(self.cwd, "verify", tid, "--require")
         self.assertEqual(rc, 0, err)
 
+    def test_pass_fail_aliases_persist_as_canonical(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-1",
+                            "--verdict", "pass", "--evidence", "e1")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("verified", out)
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-2",
+                            "--verdict", "fail", "--evidence", "e2")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("failed", out)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["criteria"]["AC-1"]["verdict"], "verified")
+        self.assertEqual(state["criteria"]["AC-2"]["verdict"], "failed")
+
 
 class TestReport(EaosTestCase):
     def test_refuses_when_unverified(self):
@@ -313,7 +330,7 @@ class TestEpisode(EaosTestCase):
         self.assertEqual(ep["loopbacks_total"], 1)
         self.assertEqual(ep["loopbacks_by_issue"], {"flaky": 1})
         self.assertEqual(ep["gates"], {"DESIGN": {"pass": 1, "fail": 0}})
-        self.assertEqual(ep["criteria"], {"AC-1": "pass"})
+        self.assertEqual(ep["criteria"], {"AC-1": "verified"})  # canonical persistence (fix 3)
         self.assertEqual(ep["criteria_verified"], 1)
         self.assertEqual(ep["criteria_total"], 1)
         self.assertEqual(ep["verdict"], "verified")
@@ -379,7 +396,20 @@ class TestEpisode(EaosTestCase):
 
 
 class TestVerifyConditional(EaosTestCase):
-    def test_blocked_criterion_conditional_pass(self):
+    def test_manual_confirmation_conditional_exit_3(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+        run(self.cwd, "verify", tid, "--criterion", "AC-2",
+            "--verdict", "manual_confirmation_required", "--evidence", "e2")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 3, err)
+        self.assertIn("CONDITIONAL", out)
+        self.assertIn("AC-2", out)
+        self.assertIn("manual_confirmation_required", out)
+
+    def test_blocked_criterion_conditional_exit_3(self):
         self.init()
         tid = self.new_task()
         run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
@@ -387,11 +417,21 @@ class TestVerifyConditional(EaosTestCase):
         run(self.cwd, "verify", tid, "--criterion", "AC-2", "--verdict", "blocked",
             "--evidence", "e2")
         rc, out, err = run(self.cwd, "verify", tid, "--require")
-        self.assertEqual(rc, 0, err)
+        self.assertEqual(rc, 3, err)
         self.assertIn("CONDITIONAL", out)
         self.assertIn("AC-2", out)
+        self.assertIn("NOT claimed complete", out)
 
-    def test_report_conditional_subsection(self):
+    def test_failed_criterion_require_exit_1(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "fail",
+            "--evidence", "e1")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("UNVERIFIED", out)
+
+    def test_report_manual_confirmation_only_wording(self):
         self.init()
         tid = self.new_task()
         run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
@@ -403,9 +443,26 @@ class TestVerifyConditional(EaosTestCase):
         report_path = os.path.join(self.cwd, ".eaos", tid, "artifacts", "final-report.md")
         with open(report_path) as f:
             content = f.read()
-        self.assertIn("Conditional — needs human confirmation", content)
+        self.assertIn("Pending manual confirmation", content)
         self.assertIn("AC-2", content)
-        self.assertIn("implementation complete; release blocked pending: AC-2", content)
+        self.assertIn("release pending manual confirmation", content)
+        self.assertNotIn("NOT claiming implementation complete", content)
+
+    def test_report_blocked_wording_not_claiming_complete(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e1")
+        run(self.cwd, "verify", tid, "--criterion", "AC-2", "--verdict", "blocked",
+            "--evidence", "e2")
+        rc, out, err = run(self.cwd, "report", tid)
+        self.assertEqual(rc, 0, err)
+        report_path = os.path.join(self.cwd, ".eaos", tid, "artifacts", "final-report.md")
+        with open(report_path) as f:
+            content = f.read()
+        self.assertIn("Unresolved (blocked / not reproducible)", content)
+        self.assertIn("NOT claiming implementation complete", content)
+        self.assertNotIn("implementation complete;", content)
 
     def test_failed_criterion_still_blocks_report(self):
         self.init()
@@ -554,7 +611,10 @@ class TestDuplicateDetection(EaosTestCase):
         rc, out, err = run(self.cwd, "task", "new", "Fix the flaky login test",
                             "--allow-duplicate", "--reason", "two people paged at once")
         self.assertEqual(rc, 0, err)
-        second = out.strip()
+        # An identical-title override also trips the overlap warning (fix 4) against
+        # `first`, so stdout carries a leading WARN line before the task id.
+        self.assertIn("WARN: overlaps", out)
+        second = out.strip().splitlines()[-1]
         self.assertNotEqual(first, second)
 
         with open(os.path.join(self.cwd, ".eaos", second, "state.json")) as f:
@@ -611,8 +671,9 @@ class TestVerifyBulk(EaosTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
             state = json.load(f)
-        self.assertEqual(state["criteria"]["AC-1"]["verdict"], "pass")
-        self.assertEqual(state["criteria"]["AC-2"]["verdict"], "fail")
+        # pass/fail are accepted input aliases but persist as the canonical enum (fix 3)
+        self.assertEqual(state["criteria"]["AC-1"]["verdict"], "verified")
+        self.assertEqual(state["criteria"]["AC-2"]["verdict"], "failed")
 
     def test_bulk_malformed_line_records_nothing(self):
         self.init()
@@ -627,6 +688,30 @@ class TestVerifyBulk(EaosTestCase):
         with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
             state = json.load(f)
         self.assertEqual(state.get("criteria", {}), {})
+
+    def test_bulk_replay_with_key_appends_once(self):
+        self.init()
+        tid = self.new_task()
+        bulk_input = "AC-1 | pass | tests/x.py::ok\nAC-2 | fail | tests/y.py::bad\n"
+
+        result1 = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk",
+             "--idempotency-key", "batch-1"],
+            cwd=self.cwd, capture_output=True, text=True, input=bulk_input,
+        )
+        self.assertEqual(result1.returncode, 0, result1.stderr)
+
+        result2 = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk",
+             "--idempotency-key", "batch-1"],
+            cwd=self.cwd, capture_output=True, text=True, input=bulk_input,
+        )
+        self.assertEqual(result2.returncode, 0, result2.stderr)
+        self.assertEqual(result1.stdout, result2.stdout)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "warroom.md")) as f:
+            warroom = f.read()
+        self.assertEqual(warroom.count("VERIFY criterion=AC-1"), 1)
 
 
 class TestLoopbackClass(EaosTestCase):
@@ -736,6 +821,223 @@ class TestSchemaMigration(EaosTestCase):
         self.assertEqual(state["revision"], 1)
         self.assertIsNone(state["parent"])
         self.assertEqual(state["idempotency_keys"], [])
+
+    def test_legacy_pass_fail_verdicts_migrate_on_load(self):
+        self.init()
+        tid = self.make_legacy_v1_task()
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        state["criteria"] = {
+            "AC-1": {"verdict": "pass", "evidence": "e1", "at": "2020-01-01T00:00:00"},
+            "AC-2": {"verdict": "fail", "evidence": "e2", "at": "2020-01-01T00:00:00"},
+        }
+        with open(state_path, "w") as f:
+            json.dump(state, f)
+
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("verified", out)
+        self.assertIn("failed", out)
+
+        # migrate_state() only canonicalizes in-memory; force a save to persist it.
+        rc, out, err = run(self.cwd, "phase", tid, "DESIGN")
+        self.assertEqual(rc, 0, err)
+
+        with open(state_path) as f:
+            migrated = json.load(f)
+        self.assertEqual(migrated["criteria"]["AC-1"]["verdict"], "verified")
+        self.assertEqual(migrated["criteria"]["AC-2"]["verdict"], "failed")
+
+
+class TestFingerprintFields(EaosTestCase):
+    def test_fingerprint_with_paths_and_criteria_differs_from_title_only(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Unique title xyz")
+        self.assertEqual(rc, 0, err)
+        t1 = out.strip()
+        with open(os.path.join(self.cwd, ".eaos", t1, "state.json")) as f:
+            fp1 = json.load(f)["fingerprint"]
+
+        rc, out, err = run(self.cwd, "task", "new", "Unique title xyz",
+                            "--paths", "src/a.py,src/b.py", "--criteria", "AC-1,AC-2")
+        self.assertEqual(rc, 0, err)
+        t2 = out.strip()
+        with open(os.path.join(self.cwd, ".eaos", t2, "state.json")) as f:
+            state2 = json.load(f)
+
+        self.assertNotEqual(t1, t2)
+        self.assertNotEqual(fp1, state2["fingerprint"])
+        self.assertEqual(state2["paths"], ["src/a.py", "src/b.py"])
+        self.assertEqual(state2["criteria_ids"], ["AC-1", "AC-2"])
+
+    def test_outcome_changes_fingerprint_too(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Same title", "--outcome", "outcome A")
+        self.assertEqual(rc, 0, err)
+        t1 = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "Same title", "--outcome", "outcome B",
+                            "--allow-duplicate", "--reason", "different outcome")
+        self.assertEqual(rc, 0, err)
+        t2 = out.strip().splitlines()[-1]
+
+        with open(os.path.join(self.cwd, ".eaos", t1, "state.json")) as f:
+            fp1 = json.load(f)["fingerprint"]
+        with open(os.path.join(self.cwd, ".eaos", t2, "state.json")) as f:
+            fp2 = json.load(f)["fingerprint"]
+        self.assertNotEqual(fp1, fp2)
+
+
+class TestOverlapWarning(EaosTestCase):
+    def test_overlap_warning_fires_at_high_jaccard(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new",
+                            "Fix the flaky login integration test")
+        self.assertEqual(rc, 0, err)
+        first = out.strip()
+
+        rc, out, err = run(self.cwd, "task", "new",
+                            "Fix the flaky login integration spec")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("WARN: overlaps", out)
+        self.assertIn(first, out)
+        second = out.strip().splitlines()[-1]
+
+        with open(os.path.join(self.cwd, ".eaos", second, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(len(state["overlap_warnings"]), 1)
+        self.assertEqual(state["overlap_warnings"][0]["task"], first)
+        self.assertGreaterEqual(state["overlap_warnings"][0]["jaccard"], 0.5)
+
+    def test_no_overlap_warning_at_low_jaccard(self):
+        self.init()
+        run(self.cwd, "task", "new", "Fix the flaky login test")
+        rc, out, err = run(self.cwd, "task", "new",
+                            "Add a totally unrelated dashboard widget")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("WARN: overlaps", out)
+        with open(os.path.join(self.cwd, ".eaos", out.strip(), "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["overlap_warnings"], [])
+
+
+class TestHardBlockerState(EaosTestCase):
+    def test_hard_blocker_sets_status_blocked_and_records_reason(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+                            "--issue", "no-fix-possible", "--attempt", "first try",
+                            "--class", "hard_blocker")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED — escalate to human", out)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["status"], "blocked")
+        self.assertEqual(state["blocked"]["reason"], "first try")
+        self.assertEqual(state["blocked"]["issue"], "no-fix-possible")
+
+    def test_mutating_verbs_refused_on_blocked_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+            "--issue", "no-fix-possible", "--attempt", "first try",
+            "--class", "hard_blocker")
+
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED", out + err)
+        self.assertIn("--unblock", out + err)
+
+        rc, out, err = run(self.cwd, "append", tid, "--from", "developer", "--to",
+                            "architect", "--type", "PROPOSE", "--body", "x")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED", out + err)
+
+        rc, out, err = run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED", out + err)
+
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-1",
+                            "--verdict", "pass", "--evidence", "e")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED", out + err)
+
+        # status/audit/report/loopback remain usable against a blocked task.
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "audit", tid)
+        self.assertEqual(rc, 0, out + err)
+
+    def test_audit_flags_hard_blocker_ledger_with_active_status(self):
+        self.init()
+        tid = self.new_task()
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        # Simulate a pre-fix-1 state: a hard_blocker ledger entry exists but status was
+        # never transitioned to blocked — exactly the discrepancy fix 1 closes.
+        state["loopbacks"]["ledger"].append({
+            "edge": "REVIEW->IMPLEMENT", "issue": "x", "attempt": "y",
+            "class": "hard_blocker", "at": "2026-01-01T00:00:00",
+        })
+        with open(state_path, "w") as f:
+            json.dump(state, f)
+
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        report = json.loads(out)
+        by_name = {c["name"]: c["ok"] for c in report["checks"]}
+        self.assertFalse(by_name["hard_blocker_state_consistency"])
+
+    def test_audit_flags_blocked_status_with_no_blocked_record(self):
+        self.init()
+        tid = self.new_task()
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        state["status"] = "blocked"
+        state["blocked"] = None
+        with open(state_path, "w") as f:
+            json.dump(state, f)
+
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        report = json.loads(out)
+        by_name = {c["name"]: c["ok"] for c in report["checks"]}
+        self.assertFalse(by_name["hard_blocker_state_consistency"])
+
+    def test_unblock_resumes_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+            "--issue", "no-fix-possible", "--attempt", "first try",
+            "--class", "hard_blocker")
+
+        rc, out, err = run(self.cwd, "phase", tid, "DESIGN", "--unblock",
+                            "--reason", "human resolved it")
+        self.assertEqual(rc, 0, err)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["status"], "active")
+        self.assertIsNone(state["blocked"])
+        self.assertEqual(len(state["unblocks"]), 1)
+        self.assertEqual(state["unblocks"][0]["reason"], "human resolved it")
+        self.assertEqual(state["phase"], "DESIGN")
+
+        # Mutating verbs succeed again once unblocked.
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer")
+        self.assertEqual(rc, 0, err)
+
+    def test_unblock_without_reason_is_usage_error(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+            "--issue", "no-fix-possible", "--attempt", "first try",
+            "--class", "hard_blocker")
+        rc, out, err = run(self.cwd, "phase", tid, "DESIGN", "--unblock")
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":

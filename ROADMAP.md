@@ -57,8 +57,13 @@ guides, and sensors.
 5. Smaller: index-only memory reads enforced · setup checksum warning (repo vs ~/.claude
    drift) · shellcheck + eval in CI · exercise worktree isolation.
 
+> **Authoritative sequence: `docs/specs/2026-09-01-eaos-v3-architecture.md` §14** (frozen).
+> This file is the historical v1→v2 record plus the live mechanism backlog in
+> `mechanisms.yaml`. Where they disagree, the spec wins.
+
 ## Remaining — requires real usage, not more building
-1. **Capture real runs** into `examples/runs/` (folder + guide ready) — evidence over claims.
+1. ~~Capture real runs~~ **Done:** `examples/runs/2026-09-01-T-001/` (public) + two graded
+   evals in `evals/results/`. Next: more task classes (bug, cross-service) per spec §13.
 2. **Live-test the adapters** in Cursor/Codex/Devin; tune install paths per tool version.
 3. **Schedule `/agentic-os triage`** in your environment (cron / scheduled task / CI nightly).
 4. **Wire the PromptDiagnoser** in `sre-incident-responder` to your LLM provider.

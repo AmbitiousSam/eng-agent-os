@@ -30,7 +30,8 @@ blocking product decisions, deadlocks, and destructive actions (push / deploy / 
 
 - **Bookkeeping is code, not prose.** The `eaos` runtime CLI enforces spawn budgets, loop-back
   ceilings, gate checks, and an evidence-mandatory Definition-of-Done table with **binding exit
-  codes** — a final report cannot be produced while any acceptance criterion is unverified.
+  codes** — EAOS cannot produce an unconditional completion claim while required criteria
+  remain unverified; blocked and manual-confirmation states are reported explicitly.
 - **Maker is never checker.** A fresh-context verifier grades every criterion with evidence
   before a standard/complex task can complete.
 - **Everything is auditable files.** War room, artifacts, decisions, and memory live in

@@ -306,18 +306,31 @@ if exists(mech_rel):
         try:
             mdoc = _y.safe_load(read(os.path.join(ROOT, mech_rel))) or {}
             entries = mdoc.get("mechanisms") or []
-            REQ = ["id", "name", "status", "motivating_evidence", "expected_effect",
-                   "primary_metric", "owner", "removal_condition"]
+            # Full frozen schema (spec section 12): every field present AND typed.
+            # guardrails may be an EMPTY list (instrumentation mechanisms) but must exist;
+            # evaluation_due_after_runs is a positive int or the explicit string "exempt".
+            REQ_PRESENT = ["id", "name", "status", "motivating_evidence", "expected_effect",
+                           "primary_metric", "owner", "removal_condition"]
             STATUSES = {"proposed", "instrumented", "active", "validated", "rejected", "retired"}
             seen_ids = set()
             bad = 0
             for m in entries:
-                mid = (m or {}).get("id", "<missing-id>")
-                missing = [f for f in REQ if not (m or {}).get(f)]
+                m = m or {}
+                mid = m.get("id", "<missing-id>")
+                missing = [f for f in REQ_PRESENT if not m.get(f)]
                 if missing:
                     err(f"{mech_rel}: {mid} missing fields: {', '.join(missing)}"); bad += 1
-                if (m or {}).get("status") not in STATUSES:
-                    err(f"{mech_rel}: {mid} invalid status '{(m or {}).get('status')}'"); bad += 1
+                if not re.match(r"^M-\d{3}$", str(mid)):
+                    err(f"{mech_rel}: id '{mid}' must match M-NNN"); bad += 1
+                if m.get("status") not in STATUSES:
+                    err(f"{mech_rel}: {mid} invalid status '{m.get('status')}'"); bad += 1
+                if not isinstance(m.get("motivating_evidence"), list) or not m.get("motivating_evidence"):
+                    err(f"{mech_rel}: {mid} motivating_evidence must be a non-empty list"); bad += 1
+                if "guardrails" not in m or not isinstance(m.get("guardrails"), list):
+                    err(f"{mech_rel}: {mid} guardrails must be a list (empty allowed)"); bad += 1
+                edr = m.get("evaluation_due_after_runs")
+                if not ((isinstance(edr, int) and not isinstance(edr, bool) and edr > 0) or edr == "exempt"):
+                    err(f"{mech_rel}: {mid} evaluation_due_after_runs must be a positive int or 'exempt'"); bad += 1
                 if mid in seen_ids:
                     err(f"{mech_rel}: duplicate id {mid}"); bad += 1
                 seen_ids.add(mid)
