@@ -40,3 +40,18 @@
 - T-029 real run on new runtime: audit caught real drift; --stakes gap found + fixed (with
   one honest recommit after a silently-failed patch).
 - Decision: run 3 BEFORE shape work, to attribute cost reduction cleanly.
+
+## 2026-09-05 (later) — Review round 4: hooks concurrency/attribution, installer hardening
+- Reviewer (read-only, all suites green) found 4 HIGH + 5 medium + a run-3 pre-registration
+  contradiction. All reproduced before fixing: audit false-drift under legit concurrent spawns
+  (100/100 in our harness), lock-busy exit 1 -> hook blocked, installer 0600->0644, global
+  CURRENT misattributed a second session's spawn; empty journal accepted; 1s backup names
+  collided; malformed hooks silently replaced; unquoted hook path (126/127).
+- Fixes: exit 4 = infrastructure (lock); audit snapshot under project->task lock; session map
+  .eaos/sessions/<sid> + `eaos session bind|unbind|resolve` + PostToolUse(Bash) binder hook,
+  fail-open on ambiguity, retarget-to-parent on child close; journal_enabled genesis marker;
+  installer preserves mode, 0600 O_EXCL ns+pid backups, SchemaError refusal, shlex.quote.
+  Discovered on the way: macOS case-insensitive FS — `.eaos/current/` collided with CURRENT.
+- Tests: 77->89 CLI, 35->67 hook assertions (injection, lock, two-session, posttool, perms).
+- Run 3 pre-registration superseded (rev 2): prompt made honestly non-deploy-bound so
+  stakes=toy is the correct classification M-010 measures.
