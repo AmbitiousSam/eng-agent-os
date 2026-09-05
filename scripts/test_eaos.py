@@ -1040,5 +1040,176 @@ class TestHardBlockerState(EaosTestCase):
         self.assertEqual(rc, 2)
 
 
+class TestIdempotencyFingerprint(EaosTestCase):
+    """fix A: an idempotency key is bound to a request fingerprint, not just a bare
+    string — reusing a key for a materially different request must be refused, never
+    silently replayed and never silently re-mutated under the first call's cache slot."""
+
+    def test_verify_conflict_on_reused_key_reviewer_repro(self):
+        # The reviewer's exact repro: key K used to verify AC-1, then the same key K
+        # reused to verify a *different* criterion with a different verdict. That must
+        # be refused outright — AC-2 must never be recorded.
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-1",
+                            "--verdict", "verified", "--evidence", "e1",
+                            "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-2",
+                            "--verdict", "failed", "--evidence", "e2",
+                            "--idempotency-key", "K")
+        self.assertEqual(rc, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", out)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertNotIn("AC-2", state["criteria"])
+        self.assertEqual(state["criteria"]["AC-1"]["verdict"], "verified")
+
+    def test_verify_replay_with_identical_args_returns_cached_output(self):
+        self.init()
+        tid = self.new_task()
+        rc, out1, err = run(self.cwd, "verify", tid, "--criterion", "AC-1",
+                             "--verdict", "verified", "--evidence", "e1",
+                             "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+        rc, out2, err = run(self.cwd, "verify", tid, "--criterion", "AC-1",
+                             "--verdict", "verified", "--evidence", "e1",
+                             "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out1, out2)
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(len(state["idempotency_keys"]), 1)
+
+    def test_spawn_conflict_on_reused_key_different_agent(self):
+        self.init(max_spawns=5)
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer",
+                            "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "qa",
+                            "--idempotency-key", "K")
+        self.assertEqual(rc, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", out)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["spawns"]["count"], 1)
+        self.assertEqual(state["spawns"]["log"][0]["agent"], "developer")
+
+    def test_bulk_verify_conflict_on_reused_key_different_body(self):
+        self.init()
+        tid = self.new_task()
+        result1 = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk", "--idempotency-key", "K"],
+            cwd=self.cwd, capture_output=True, text=True,
+            input="AC-1 | pass | e1\n",
+        )
+        self.assertEqual(result1.returncode, 0, result1.stderr)
+
+        result2 = subprocess.run(
+            [sys.executable, EAOS, "verify", tid, "--bulk", "--idempotency-key", "K"],
+            cwd=self.cwd, capture_output=True, text=True,
+            input="AC-2 | fail | e2\n",
+        )
+        self.assertEqual(result2.returncode, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", result2.stdout)
+
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            state = json.load(f)
+        self.assertNotIn("AC-2", state.get("criteria", {}))
+        self.assertIn("AC-1", state.get("criteria", {}))
+
+
+class TestEpisodeCloseDuplicateRevision(EaosTestCase):
+    def test_preexisting_revision_blocks_bare_close_and_appends_nothing(self):
+        # fix B: simulate an out-of-band runs.jsonl write for (task, close_revision=1) —
+        # e.g. a hand-edited file — that this CLI never produced (state.json is still
+        # "active"). A bare close must still refuse rather than append a second
+        # close_revision=1 line for the same task.
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "pass",
+            "--evidence", "e")
+
+        runs = os.path.join(self.cwd, ".eaos", "runs.jsonl")
+        fake = {"schema_version": 1, "task": tid, "close_revision": 1, "closed": "x"}
+        with open(runs, "w") as f:
+            f.write(json.dumps(fake) + "\n")
+
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("already closed", out + err)
+
+        with open(runs) as f:
+            lines = [l for l in f if l.strip()]
+        self.assertEqual(len(lines), 1)
+
+
+class TestAuditRunsJsonlConsistency(EaosTestCase):
+    def test_audit_flags_duplicate_and_gap(self):
+        self.init()
+        tid = self.new_task()
+        runs = os.path.join(self.cwd, ".eaos", "runs.jsonl")
+        entries = [
+            {"schema_version": 1, "task": tid, "close_revision": 1, "closed": "t1"},
+            {"schema_version": 1, "task": tid, "close_revision": 1, "closed": "t2"},  # dup
+            {"schema_version": 1, "task": tid, "close_revision": 3, "closed": "t3"},  # gap
+        ]
+        with open(runs, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+            f.write(f'{{"task": "{tid}", "close_revision": broken}}\n')  # malformed
+
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        report = json.loads(out)
+        by_name = {c["name"]: c for c in report["checks"]}
+        self.assertFalse(by_name["runs_jsonl_consistency"]["ok"])
+        detail = by_name["runs_jsonl_consistency"]["detail"]
+        self.assertIn("duplicate", detail)
+        self.assertIn("gap", detail)
+        self.assertIn("malformed", detail)
+
+
+class TestTaskNewIdempotency(EaosTestCase):
+    def test_replay_same_key_same_args_returns_same_id_and_creates_nothing(self):
+        self.init()
+        rc, out1, err = run(self.cwd, "task", "new", "Some title", "--kind", "feature",
+                             "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+        t1 = out1.strip()
+
+        rc, out2, err = run(self.cwd, "task", "new", "Some title", "--kind", "feature",
+                             "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+        t2 = out2.strip()
+        self.assertEqual(t1, t2)
+
+        task_dirs = [n for n in os.listdir(os.path.join(self.cwd, ".eaos"))
+                     if n.startswith("T-")]
+        self.assertEqual(len(task_dirs), 1)
+
+    def test_conflict_same_key_different_title(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "Title A", "--idempotency-key", "K")
+        self.assertEqual(rc, 0, err)
+
+        rc, out, err = run(self.cwd, "task", "new", "Title B", "--idempotency-key", "K")
+        self.assertEqual(rc, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", out)
+
+        task_dirs = [n for n in os.listdir(os.path.join(self.cwd, ".eaos"))
+                     if n.startswith("T-")]
+        self.assertEqual(len(task_dirs), 1)
+
+    def test_idempotency_store_created_by_init(self):
+        self.init()
+        self.assertTrue(os.path.isfile(os.path.join(self.cwd, ".eaos", "idempotency.json")))
+
+
 if __name__ == "__main__":
     unittest.main()

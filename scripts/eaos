@@ -153,23 +153,37 @@ def read_warroom_text(task_id):
 def runs_path():
     return os.path.join(eaos_dir(), "runs.jsonl")
 
-def read_episode_lines_for_task(task_id):
+def scan_runs_jsonl_for_task(task_id):
+    """Read runs.jsonl once and split, for this task, cleanly-parsed episode lines from
+    malformed ones that still reference the task. A malformed line is best-effort
+    attributed to the task the same way the other regex-based audit checks work: the
+    raw text still carries a `"task": "<id>"` field even though it fails to parse as
+    JSON (fix B — audit check (j) needs both halves). Returns (parsed, malformed) where
+    malformed is a list of (lineno, raw_line)."""
     p = runs_path()
-    lines = []
+    parsed = []
+    malformed = []
     if not os.path.isfile(p):
-        return lines
+        return parsed, malformed
+    task_marker = re.compile(r'"task"\s*:\s*"' + re.escape(task_id) + r'"')
     with open(p, encoding="utf-8") as f:
-        for raw in f:
+        for lineno, raw in enumerate(f, start=1):
             raw = raw.strip()
             if not raw:
                 continue
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
+                if task_marker.search(raw):
+                    malformed.append((lineno, raw))
                 continue
             if obj.get("task") == task_id:
-                lines.append(obj)
-    return lines
+                parsed.append(obj)
+    return parsed, malformed
+
+def read_episode_lines_for_task(task_id):
+    parsed, _ = scan_runs_jsonl_for_task(task_id)
+    return parsed
 
 # ---------- locking ----------
 # Per-task lock: .eaos/<id>/.lock — guards state.json + warroom.md for that task.
@@ -249,18 +263,27 @@ def project_lock():
 #
 # Idempotency map (spec §11 — every mutating verb accepts or generates an idempotency
 # key; BY-CONSTRUCTION means a replay is already safe without a key because the
-# operation is a deterministic overwrite/no-op, not because it silently double-mutates):
+# operation is a deterministic overwrite/no-op, not because it silently double-mutates).
+# KEYED verbs (fix A) bind the key to a sha256 request fingerprint over the verb, task
+# id, normalized args, and any stdin/body content (see compute_request_fingerprint) —
+# the same key reused for a materially different request is refused as an IDEMPOTENCY
+# CONFLICT (exit 1, nothing mutated) rather than replayed or silently re-mutated under
+# the first call's cached slot:
 #   init            BY-CONSTRUCTION — no-ops when config.json already exists
-#   task new        fingerprint-guarded (exact match blocks, overlap warns); a true
-#                   per-call idempotency key is DEFERRED — see the fix-4 comment on
-#                   compute_fingerprint for why structured intake can't fully dedupe yet
+#   task new        KEYED (--idempotency-key; project-level store .eaos/idempotency.json,
+#                   fix C) AND fingerprint-guarded (exact match blocks, overlap warns) —
+#                   the two are independent: the idempotency key detects "this exact call
+#                   was retried," the duplicate fingerprint detects "this is the same
+#                   task request even without a shared key"
 #   append          KEYED (--idempotency-key)
 #   phase           KEYED (--idempotency-key)
 #   spawn           KEYED (--idempotency-key)
 #   loopback        KEYED (--idempotency-key)
 #   gate            KEYED (--idempotency-key)
 #   verify          KEYED (--idempotency-key; single-criterion and --bulk both)
-#   episode close   KEYED (--idempotency-key) + --amend for a genuine, intentional re-close
+#   episode close   KEYED (--idempotency-key) + --amend for a genuine, intentional
+#                   re-close; also refuses (independent of any key) a duplicate
+#                   (task, close_revision) pair already on disk (fix B)
 #   report          BY-CONSTRUCTION — deterministic overwrite of the same artifact path
 #                   from the same state; task-locked while writing, no key needed
 #   status / audit  read-only, not mutating — no idempotency concern
@@ -273,13 +296,94 @@ def idempotency_lookup(state, key):
             return entry
     return None
 
-def idempotency_record(state, key, output):
+def idempotency_record(state, key, fingerprint, output):
     if not key:
         return
     keys = state.setdefault("idempotency_keys", [])
-    keys.append({"key": key, "output": output})
+    keys.append({"key": key, "fingerprint": fingerprint, "output": output})
     if len(keys) > IDEMPOTENCY_KEEP:
         del keys[: len(keys) - IDEMPOTENCY_KEEP]
+
+def compute_request_fingerprint(verb, task_id, arg_pairs=(), body_text=None):
+    """Deterministic hash of an idempotency-keyed request (fix A / spec §11): sha256
+    over (verb, task id, sorted normalized argument pairs excluding the key itself,
+    sha256 of any stdin/body content). Two calls presenting the same key but a
+    different fingerprint mean the key was reused for a materially different request —
+    that must be refused (IDEMPOTENCY CONFLICT), never silently replayed and never
+    silently re-mutated under the first call's cached output."""
+    normalized = sorted((str(k), "" if v is None else str(v)) for k, v in arg_pairs)
+    body_hash = hashlib.sha256((body_text or "").encode("utf-8")).hexdigest()
+    payload = json.dumps(
+        {"verb": verb, "task": task_id or "", "args": normalized, "body_sha256": body_hash},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+def idempotency_guard(state, key, fingerprint, verb, task_id):
+    """Look up `key` in state.idempotency_keys (a no-op if key is falsy). Found +
+    fingerprint matches -> print the cached output and exit 0 (safe replay). Found +
+    fingerprint differs -> exit 1 as an IDEMPOTENCY CONFLICT; nothing is mutated because
+    this check runs before any state change. Not found -> return normally so the caller
+    proceeds to mutate and must call idempotency_record() with this same fingerprint."""
+    entry = idempotency_lookup(state, key)
+    if not entry:
+        return
+    if entry.get("fingerprint") != fingerprint:
+        print(f"IDEMPOTENCY CONFLICT: key '{key}' was used for a different request "
+              f"({verb} {task_id}) — use a new key")
+        sys.exit(1)
+    print(entry["output"])
+    sys.exit(0)
+
+# ---------- task-new idempotency store (fix C) ----------
+# Project-level, not per-task: task new hasn't allocated a task id yet when the key is
+# checked, so the map (key -> {task_id, fingerprint, at}) lives in its own file guarded
+# by the project lock, mirroring config.json/runs.jsonl.
+
+def task_idempotency_path():
+    return os.path.join(eaos_dir(), "idempotency.json")
+
+def load_task_idempotency():
+    p = task_idempotency_path()
+    if not os.path.isfile(p):
+        return {}  # tolerated: created lazily on first use, same as init would create it
+    with open(p, encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_task_idempotency(store):
+    if len(store) > IDEMPOTENCY_KEEP:
+        for k in list(store.keys())[: len(store) - IDEMPOTENCY_KEEP]:
+            del store[k]
+    p = task_idempotency_path()
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, p)
+
+def compute_task_new_fingerprint(title, kind, stakes, playbook, parent, paths,
+                                  criteria_ids, outcome):
+    """Fingerprint for the task-new idempotency key (fix C) — distinct from
+    compute_fingerprint (the duplicate-detection fingerprint below): this one folds in
+    every field the CLI call actually carries (including stakes/playbook, which don't
+    matter for duplicate detection) because its only job is "was this the exact same
+    create-task call replayed, or a different one reusing the same key." It needs no
+    structured-intake machinery to do that — see the compute_fingerprint docstring for
+    why semantic duplicate detection is a harder, separate problem."""
+    payload = json.dumps({
+        "title": (title or "").strip(),
+        "kind": kind or "",
+        "stakes": stakes or "",
+        "playbook": playbook or "",
+        "parent": parent or "",
+        "paths": sorted(p.strip() for p in (paths or []) if p.strip()),
+        "criteria": sorted(c.strip() for c in (criteria_ids or []) if c.strip()),
+        "outcome": (outcome or "").strip(),
+    }, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 # ---------- init ----------
 
@@ -315,6 +419,8 @@ def cmd_init(args):
                 json.dump(cfg, f, indent=2)
                 f.write("\n")
             cfg_status = "created"
+        if not os.path.isfile(task_idempotency_path()):
+            save_task_idempotency({})
 
     print(f"OK: eaos initialized (config: {cfg_status}, memory-index: {seeded})")
     sys.exit(0)
@@ -350,7 +456,10 @@ def compute_fingerprint(parent, kind, title, paths=None, criteria=None, outcome=
     overlap (same tokens/paths/criteria) — a semantic duplicate phrased differently
     ("fix the flaky login test" vs "stabilize sign-in spec") is invisible to it. That
     needs structured intake fields captured upstream of task creation, which does not
-    exist yet (fix 4 note; task-new idempotency key is deferred for the same reason)."""
+    exist yet (fix 4 note). Task new's own idempotency key (fix C, see
+    compute_task_new_fingerprint) is a separate, exact-replay mechanism and does not
+    need that machinery — it only detects an identical retried call, not a semantic
+    duplicate."""
     title_tokens = _tokenize(title)
     path_list = sorted(p.strip() for p in (paths or []) if p.strip())
     criteria_list = sorted(c.strip() for c in (criteria or []) if c.strip())
@@ -419,8 +528,26 @@ def cmd_task_new(args):
 
     fp = compute_fingerprint(args.parent, args.kind, args.title, paths, criteria_ids,
                               outcome)
+    key_fp = compute_task_new_fingerprint(args.title, args.kind, args.stakes,
+                                           args.playbook, args.parent, paths,
+                                           criteria_ids, outcome)
 
     with project_lock():
+        # fix C: task-new idempotency key, checked before anything else — a replay
+        # creates nothing and just prints the original id; a conflict refuses outright.
+        idempotency_store = None
+        if args.idempotency_key:
+            idempotency_store = load_task_idempotency()
+            entry = idempotency_store.get(args.idempotency_key)
+            if entry:
+                if entry.get("fingerprint") != key_fp:
+                    print(f"IDEMPOTENCY CONFLICT: key '{args.idempotency_key}' was used "
+                          f"for a different request (task new '{args.title}') — use a "
+                          f"new key")
+                    sys.exit(1)
+                print(entry["task_id"])
+                sys.exit(0)
+
         if not args.allow_duplicate:
             dup = find_duplicate_task(fp)
             if dup:
@@ -470,6 +597,12 @@ def cmd_task_new(args):
         if args.allow_duplicate and args.reason:
             state["duplicate_override_reason"] = args.reason
         save_state(task_id, state)
+
+        if args.idempotency_key:
+            idempotency_store[args.idempotency_key] = {
+                "task_id": task_id, "fingerprint": key_fp, "at": ts,
+            }
+            save_task_idempotency(idempotency_store)
     print(task_id)
     sys.exit(0)
 
@@ -490,10 +623,13 @@ def cmd_append(args):
 
     with task_lock(args.id):
         state = load_state(args.id)
-        cached = idempotency_lookup(state, args.idempotency_key)
-        if cached:
-            print(cached["output"])
-            sys.exit(0)
+        fp = compute_request_fingerprint(
+            "append", args.id,
+            [("from", args.frm), ("to", args.to), ("type", args.type),
+             ("ref", args.ref), ("priority", args.priority)],
+            body_text=body_text,
+        )
+        idempotency_guard(state, args.idempotency_key, fp, "append", args.id)
         if state.get("status") == "blocked":
             ensure_not_blocked(state, args.id)
 
@@ -508,7 +644,7 @@ def cmd_append(args):
         state["next_msg_num"] += 1
 
         out = f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})"
-        idempotency_record(state, args.idempotency_key, out)
+        idempotency_record(state, args.idempotency_key, fp, out)
         save_state(args.id, state)
 
         block = [f"\n- id: {msg_id}", f"  from: {args.frm}", f"  to: [{', '.join(to_list)}]",
@@ -529,10 +665,11 @@ def cmd_append(args):
 def cmd_phase(args):
     with task_lock(args.id):
         state = load_state(args.id)
-        cached = idempotency_lookup(state, args.idempotency_key)
-        if cached:
-            print(cached["output"])
-            sys.exit(0)
+        fp = compute_request_fingerprint(
+            "phase", args.id,
+            [("phase", args.phase), ("unblock", args.unblock), ("reason", args.reason)],
+        )
+        idempotency_guard(state, args.idempotency_key, fp, "phase", args.id)
         if state.get("status") == "blocked" and not args.unblock:
             ensure_not_blocked(state, args.id)
 
@@ -551,7 +688,7 @@ def cmd_phase(args):
         state["phase"] = args.phase
         state["phase_history"].append({"phase": args.phase, "at": ts})
         out = f"OK: phase {old} -> {args.phase}" + (" (unblocked)" if args.unblock else "")
-        idempotency_record(state, args.idempotency_key, out)
+        idempotency_record(state, args.idempotency_key, fp, out)
         save_state(args.id, state)
         warroom_log(args.id, f"\n[{ts}] STATUS phase: {old} -> {args.phase}{unblock_note}\n")
     print(out)
@@ -602,10 +739,8 @@ def cmd_spawn(args):
     with project_lock():
         with task_lock(args.id):
             state = load_state(args.id)
-            cached = idempotency_lookup(state, args.idempotency_key)
-            if cached:
-                print(cached["output"])
-                sys.exit(0)
+            fp = compute_request_fingerprint("spawn", args.id, [("agent", args.agent)])
+            idempotency_guard(state, args.idempotency_key, fp, "spawn", args.id)
             if state.get("status") == "blocked":
                 ensure_not_blocked(state, args.id)
 
@@ -626,7 +761,7 @@ def cmd_spawn(args):
             n = state["spawns"]["count"]
             state["spawns"]["log"].append({"agent": args.agent, "at": ts})
             out = f"OK: {n}/{cap} spawns (tree total {total + 1}/{cap}, root {root})"
-            idempotency_record(state, args.idempotency_key, out)
+            idempotency_record(state, args.idempotency_key, fp, out)
             save_state(args.id, state)
             warroom_log(args.id, f"[{ts}] SPAWN agent={args.agent} tally={n}/{cap} "
                                   f"tree_total={total + 1}/{cap}")
@@ -647,10 +782,12 @@ def cmd_loopback(args):
 
     with task_lock(args.id):
         state = load_state(args.id)
-        cached = idempotency_lookup(state, args.idempotency_key)
-        if cached:
-            print(cached["output"])
-            sys.exit(0)
+        fp = compute_request_fingerprint(
+            "loopback", args.id,
+            [("edge", args.edge), ("issue", args.issue), ("attempt", args.attempt),
+             ("class", lb_class)],
+        )
+        idempotency_guard(state, args.idempotency_key, fp, "loopback", args.id)
 
         lb = state["loopbacks"]
 
@@ -706,7 +843,7 @@ def cmd_loopback(args):
 
         out = (f"OK: {same_n}/{max_same} same-issue, {total_n}/{max_total} total loop-backs "
                f"remaining allowance {max_same - same_n}/{max_total - total_n}")
-        idempotency_record(state, args.idempotency_key, out)
+        idempotency_record(state, args.idempotency_key, fp, out)
         save_state(args.id, state)
 
     print(out)
@@ -731,22 +868,24 @@ def cmd_gate(args):
     if not args.check or (args.passed == args.failed):  # neither or both given
         die("gate: need --check NAME with exactly one of --pass/--fail, or --require", 2)
 
+    result = "pass" if args.passed else "fail"
     with task_lock(args.id):
         state = load_state(args.id)
-        cached = idempotency_lookup(state, args.idempotency_key)
-        if cached:
-            print(cached["output"])
-            sys.exit(0)
+        fp = compute_request_fingerprint(
+            "gate", args.id,
+            [("phase", args.phase), ("check", args.check), ("result", result),
+             ("note", args.note)],
+        )
+        idempotency_guard(state, args.idempotency_key, fp, "gate", args.id)
         if state.get("status") == "blocked":
             ensure_not_blocked(state, args.id)
 
         gates = state.setdefault("gates", {})
         phase_gates = gates.setdefault(args.phase, {})
         ts = now_iso()
-        result = "pass" if args.passed else "fail"
         phase_gates[args.check] = {"result": result, "note": args.note, "at": ts}
         out = f"OK: {args.phase}/{args.check} = {result}"
-        idempotency_record(state, args.idempotency_key, out)
+        idempotency_record(state, args.idempotency_key, fp, out)
         save_state(args.id, state)
         warroom_log(args.id, f"[{ts}] GATE phase={args.phase} check={args.check} "
                               f"result={result} note={args.note or ''}")
@@ -834,11 +973,11 @@ def cmd_verify(args):
         with task_lock(args.id):
             state = load_state(args.id)
             # fix 5: one idempotency key covers the whole batch — a replay returns the
-            # cached output and appends nothing a second time.
-            cached = idempotency_lookup(state, args.idempotency_key)
-            if cached:
-                print(cached["output"])
-                sys.exit(0)
+            # cached output and appends nothing a second time. fix A: the key is bound
+            # to a fingerprint of the raw bulk input itself (the body), so the same key
+            # reused with different bulk content is a conflict, not a silent replay.
+            fp = compute_request_fingerprint("verify --bulk", args.id, body_text=text)
+            idempotency_guard(state, args.idempotency_key, fp, "verify --bulk", args.id)
             if state.get("status") == "blocked":
                 ensure_not_blocked(state, args.id)
 
@@ -849,7 +988,7 @@ def cmd_verify(args):
                 warroom_log(args.id, f"[{ts}] VERIFY criterion={criterion} "
                                       f"verdict={verdict} evidence={evidence}")
             out = f"OK: {len(parsed)} criteria recorded via --bulk"
-            idempotency_record(state, args.idempotency_key, out)
+            idempotency_record(state, args.idempotency_key, fp, out)
             save_state(args.id, state)
         print(out)
         sys.exit(0)
@@ -862,22 +1001,24 @@ def cmd_verify(args):
         die("verify: --evidence is mandatory with --verdict (an unevidenced pass is "
             "exactly the fantasy this tool exists to kill)", 2)
 
+    verdict = canonicalize_verdict(args.verdict)
     with task_lock(args.id):
         state = load_state(args.id)
-        cached = idempotency_lookup(state, args.idempotency_key)
-        if cached:
-            print(cached["output"])
-            sys.exit(0)
+        fp = compute_request_fingerprint(
+            "verify", args.id,
+            [("criterion", args.criterion), ("verdict", verdict),
+             ("evidence", args.evidence)],
+        )
+        idempotency_guard(state, args.idempotency_key, fp, "verify", args.id)
         if state.get("status") == "blocked":
             ensure_not_blocked(state, args.id)
 
-        verdict = canonicalize_verdict(args.verdict)
         ts = now_iso()
         state.setdefault("criteria", {})[args.criterion] = {
             "verdict": verdict, "evidence": args.evidence, "at": ts,
         }
         out = f"OK: {args.criterion} = {verdict}"
-        idempotency_record(state, args.idempotency_key, out)
+        idempotency_record(state, args.idempotency_key, fp, out)
         save_state(args.id, state)
         warroom_log(args.id, f"[{ts}] VERIFY criterion={args.criterion} "
                               f"verdict={verdict} evidence={args.evidence}")
@@ -1027,10 +1168,9 @@ def cmd_episode_close(args):
     with project_lock():
         with task_lock(args.id):
             state = load_state(args.id)
-            cached = idempotency_lookup(state, args.idempotency_key)
-            if cached:
-                print(cached["output"])
-                sys.exit(0)
+            fp = compute_request_fingerprint("episode close", args.id,
+                                              [("amend", args.amend)])
+            idempotency_guard(state, args.idempotency_key, fp, "episode close", args.id)
 
             existing = read_episode_lines_for_task(args.id)
             if existing and not args.amend:
@@ -1090,6 +1230,17 @@ def cmd_episode_close(args):
             if existing:
                 close_revision = max(e.get("close_revision", 1) for e in existing) + 1
 
+            # fix B: read-check-append within the lock — refuse rather than ever writing
+            # two runs.jsonl lines for the same (task, close_revision) pair. With
+            # close_revision always computed as max(existing)+1 immediately above, this
+            # can only fire if `existing` itself is inconsistent (e.g. a hand-edited or
+            # externally-tampered runs.jsonl) — exactly the case this defends against,
+            # since the alternative would be silently appending a colliding duplicate.
+            if any(e.get("close_revision") == close_revision for e in existing):
+                die(f"REFUSED: a runs.jsonl line for ({args.id}, "
+                    f"close_revision={close_revision}) already exists — refusing to "
+                    f"write a duplicate", 1)
+
             episode = {
                 "schema_version": 1,
                 "task": args.id,
@@ -1125,7 +1276,7 @@ def cmd_episode_close(args):
 
             state["status"] = "closed"
             out = f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})"
-            idempotency_record(state, args.idempotency_key, out)
+            idempotency_record(state, args.idempotency_key, fp, out)
             save_state(args.id, state)
 
             warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
@@ -1241,6 +1392,38 @@ def cmd_audit(args):
     add("hard_blocker_state_consistency", not i_bad,
         "; ".join(i_bad) if i_bad else "none")
 
+    # (j) fix B: runs.jsonl reconciliation for this task — duplicate (task,
+    # close_revision) pairs, a close_revision sequence that isn't strictly increasing in
+    # file order, gaps in the 1..N contiguous revision numbering, and malformed lines
+    # that still reference this task. (state.status == "closed" with zero episode lines,
+    # or the reverse, is already covered by check (d) episode_vs_status above — not
+    # duplicated here.)
+    parsed_eps, malformed_lines = scan_runs_jsonl_for_task(args.id)
+    revisions = [e.get("close_revision") for e in parsed_eps]
+    j_bad = []
+
+    counts = {}
+    for r in revisions:
+        counts[r] = counts.get(r, 0) + 1
+    dup_revs = sorted((r for r, c in counts.items() if c > 1), key=lambda x: (x is None, x))
+    if dup_revs:
+        j_bad.append(f"duplicate close_revision(s): {dup_revs}")
+
+    if any(a is None or b is None or a >= b for a, b in zip(revisions, revisions[1:])):
+        j_bad.append(f"close_revision not strictly increasing in file order: {revisions}")
+
+    uniq_sorted = sorted(r for r in revisions if r is not None)
+    uniq_sorted = sorted(set(uniq_sorted))
+    if uniq_sorted and uniq_sorted != list(range(1, len(uniq_sorted) + 1)):
+        j_bad.append(f"close_revision gap(s): have {uniq_sorted}, expected "
+                     f"1..{len(uniq_sorted)}")
+
+    if malformed_lines:
+        j_bad.append("malformed runs.jsonl line(s) referencing this task: lines "
+                     f"{[ln for ln, _ in malformed_lines]}")
+
+    add("runs_jsonl_consistency", not j_bad, "; ".join(j_bad) if j_bad else "none")
+
     discrepancies = [c for c in checks if not c["ok"]]
 
     if args.json:
@@ -1286,6 +1469,7 @@ def build_parser():
                                  "only (not the overlap-warning score)")
     p_task_new.add_argument("--allow-duplicate", action="store_true", dest="allow_duplicate")
     p_task_new.add_argument("--reason", default=None)
+    p_task_new.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_task_new.set_defaults(func=cmd_task_new)
 
     p_append = sub.add_parser("append")
