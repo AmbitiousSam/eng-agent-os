@@ -27,3 +27,16 @@
 - **Single front door:** /agentic-os only; legacy commands removed on upgrade; triage-shaped
   route added; all docs + wiki swept. Commit 0bbc97f (BREAKING).
 - **Open:** zero captured real runs (rung 2), routing dry-run + A/B eval (rung 3).
+
+## 2026-09-01 → 09-05 — Evidence runs, v3 spec, runtime completion, review loop, hooks
+- Paired evals: run 1 (audit) complementary at 1.2x; run 2 (Throne build) EAOS 7/7 vs 3/7 at
+  14.4x — first public captured run (examples/runs/2026-09-01-T-001).
+- v3 architecture spec written through a 3-round adversarial design exchange; frozen rev 2
+  (grounding contract, consistency layer, honest enforcement chain, mechanism lifecycle).
+- Runtime §11 built (locks, idempotency w/ content-bound keys, parent-tree budgets,
+  fingerprints, audit w/ revision journal + tree reconciliation, honest conditional exits).
+  Three external review rounds; every finding reproduced fixed before commit.
+- M-009 coverage manifest, M-010 stakes lifecycle, models.mode inherit, M-007 hooks shipped.
+- T-029 real run on new runtime: audit caught real drift; --stakes gap found + fixed (with
+  one honest recommit after a silently-failed patch).
+- Decision: run 3 BEFORE shape work, to attribute cost reduction cleanly.
