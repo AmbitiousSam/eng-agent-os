@@ -90,6 +90,10 @@ else
 fi
 if [ -f "$CLAUDE_DIR/settings.json" ] && grep -q "eaos-hook.sh" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
   pass "hooks wired into settings.json — spawn/audit run without model cooperation"
+  if ! grep -q "eaos-hook.sh.* posttool" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+    note "settings.json predates session-scoped hooks (no PostToolUse entry) — re-run" \
+         "./scripts/install-eaos-hooks.sh so each session binds to ITS task (docs/HOOKS.md)"
+  fi
 else
   note "hooks not wired into settings.json (optional) — prompt+audit only until you" \
        "opt in with: ./scripts/install-eaos-hooks.sh"

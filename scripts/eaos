@@ -10,7 +10,9 @@ State lives under ./.eaos/ in the target project (cwd). Two files per task:
 
 Exit codes: 0 = allowed/ok, 1 = ceiling hit / gate unmet / invalid / task BLOCKED,
 2 = usage error, 3 = CONDITIONAL (verify --require only: no failed criteria, but at
-least one conditional criterion remains — see §11 and the criterion-state comment below).
+least one conditional criterion remains — see §11 and the criterion-state comment below),
+4 = INFRASTRUCTURE (lock contention/timeout — nothing was mutated, retry; never a policy
+verdict, so a host hook must fail OPEN on it, review round 4 HIGH-2).
 stdlib only (json/argparse/os/re/datetime/hashlib/time/contextlib). No third-party
 deps, ever.
 
@@ -64,6 +66,7 @@ MANUAL_CONFIRMATION_VERDICT = "manual_confirmation_required"
 LOOPBACK_CLASSES = ("recoverable", "transient", "hard_blocker")
 
 LOCK_STALE_SECONDS = 60
+EXIT_INFRA = 4   # lock contention/timeout: not a verdict (see module docstring)
 LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_POLL_SECONDS = 0.05
 
@@ -135,6 +138,10 @@ def save_state(task_id, state):
     # mid-write leaves the previous-valid state.json, never a partial/corrupt one.
     state["schema_version"] = STATE_SCHEMA_VERSION
     state["revision"] = state.get("revision", 0) + 1
+    # Genesis marker: once any save_state has run, this task HAS a journal. Audit (l)
+    # then treats a missing/empty revisions.jsonl as deleted history, not as a legacy
+    # pre-journal task (review round 4 medium-1).
+    state["journal_enabled"] = True
     p = state_path(task_id)
     tmp = f"{p}.tmp.{os.getpid()}"
     payload = json.dumps(state, indent=2) + "\n"
@@ -177,10 +184,11 @@ def read_warroom_text(task_id):
 def runs_path():
     return os.path.join(eaos_dir(), "runs.jsonl")
 
-# ---------- CURRENT (project lock — M-007 / spec §11 hooks-as-accelerators) ----------
-# .eaos/CURRENT names the task a host hook should act on without the model naming it
-# explicitly: `task new` points it at the task just created; `episode close` clears it
-# once that same task closes. It is advisory bookkeeping (like everything else in this
+# ---------- CURRENT (legacy single-session pointer — M-007 / spec §11) ----------
+# .eaos/CURRENT names the most recently created task: `task new` points it there;
+# `episode close` clears it once that same task closes. Hooks resolve their task through
+# the SESSION map below (resolve_hook_task) and only fall back to CURRENT when it is
+# unambiguous; `eaos status` with no id still reads it. It is advisory bookkeeping (like everything else in this
 # file, the wrapper remains the authoritative mutation path) — a plain text file holding
 # one task id, written atomically the same way state.json is.
 
@@ -208,6 +216,118 @@ def clear_current_if_matches(task_id):
             os.remove(current_path())
         except OSError:
             pass
+
+# ---------- session-scoped task pointers (review round 4 HIGH-4) ----------
+# .eaos/sessions/<session-id> maps ONE host session to the task it is working on. A hook
+# resolves its task through this map (from the host payload's session_id) — never
+# through the global CURRENT alone — so two sessions in one checkout cannot attribute
+# each other's spawns/audits. Written by `task new --session` (or $EAOS_SESSION_ID) and
+# `session bind`; retargeted to the parent task (if still active) or removed by
+# `episode close`. Temp files start with '.' so they can never match SESSION_ID_RE.
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+def sessions_dir():
+    return os.path.join(eaos_dir(), "sessions")
+
+def check_session_id(sid):
+    if not SESSION_ID_RE.match(sid or ""):
+        die("invalid session id (allowed [A-Za-z0-9._-], 1-128 chars, no leading '.')", 2)
+    return sid
+
+def session_map_path(sid):
+    return os.path.join(sessions_dir(), check_session_id(sid))
+
+def read_session_map(sid):
+    p = session_map_path(sid)
+    if not os.path.isfile(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        val = f.read().strip()
+    return val or None
+
+def write_session_map(sid, task_id):
+    os.makedirs(sessions_dir(), exist_ok=True)
+    p = session_map_path(sid)
+    tmp = os.path.join(sessions_dir(), f".{sid}.tmp.{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(task_id + "\n")
+    os.replace(tmp, p)
+
+def remove_session_map(sid):
+    try:
+        os.remove(session_map_path(sid))
+    except OSError:
+        pass
+
+def all_session_maps():
+    d = sessions_dir()
+    if not os.path.isdir(d):
+        return {}
+    out = {}
+    for name in sorted(os.listdir(d)):
+        if not SESSION_ID_RE.match(name):
+            continue
+        with open(os.path.join(d, name), encoding="utf-8") as f:
+            val = f.read().strip()
+        if val:
+            out[name] = val
+    return out
+
+def active_task_ids():
+    out = []
+    for tid in all_task_ids():
+        try:
+            if load_state(tid).get("status") != "closed":
+                out.append(tid)
+        except SystemExit:
+            continue
+    return out
+
+def retarget_session_maps_on_close(task_id, parent):
+    """episode close: every session pointing at the closing task is re-pointed to its
+    parent when that parent is still active (the session continues parent work), else
+    removed. Sessions bound to other tasks are never touched."""
+    parent_active = False
+    if parent:
+        try:
+            parent_active = load_state(parent).get("status") != "closed"
+        except SystemExit:
+            parent_active = False
+    for sid, tid in all_session_maps().items():
+        if tid != task_id:
+            continue
+        if parent_active:
+            write_session_map(sid, parent)
+        else:
+            remove_session_map(sid)
+
+def resolve_hook_task(sid):
+    """The ONE rule a host hook uses to find its task. Returns (task_id, reason):
+      1. sid given and .eaos/sessions/<sid> names an ACTIVE task -> that task
+         (a mapping to a closed/missing task is stale: dropped, then fall through).
+      2. sid given, no mapping, exactly ONE active task in the project -> bind sid to it
+         and return it (unambiguous — there is nothing else it could be).
+      3. no sid (host without session ids): .eaos/CURRENT, only if it names an active
+         task AND it is the only active task.
+      4. anything else (0 or >=2 active tasks without a mapping) -> None: ambiguity
+         means the hook fails open rather than attribute work to the wrong task."""
+    active = active_task_ids()
+    if sid:
+        mapped = read_session_map(sid)
+        if mapped:
+            if mapped in active:
+                return mapped, "mapped"
+            remove_session_map(sid)
+        if len(active) == 1:
+            write_session_map(sid, active[0])
+            return active[0], "bound-single-active"
+        return None, ("no active task" if not active else
+                      f"ambiguous: {len(active)} active tasks and no mapping for {sid}")
+    current = read_current()
+    if current and current in active and len(active) == 1:
+        return current, "current-single-active"
+    return None, ("no active task" if not active else
+                  "ambiguous: no session id and more than one active task")
 
 def scan_runs_jsonl_for_task(task_id):
     """Read runs.jsonl once and split, for this task, cleanly-parsed episode lines from
@@ -273,7 +393,7 @@ def _acquire_lock(path):
             continue
         if time.monotonic() >= deadline:
             die(f"lock busy: {path} — another eaos process is mutating this state, "
-                f"retry shortly", 1)
+                f"retry shortly", EXIT_INFRA)
         time.sleep(LOCK_POLL_SECONDS)
 
 def _release_lock(path):
@@ -575,6 +695,9 @@ def find_overlap_warnings(parent, title, paths, criteria):
 def cmd_task_new(args):
     if args.parent:
         task_dir(args.parent)  # validates existence; dies with usage error if missing
+    session = args.session or os.environ.get("EAOS_SESSION_ID") or None
+    if session:
+        check_session_id(session)
     if args.allow_duplicate and not args.reason:
         die("task new: --allow-duplicate requires --reason", 2)
 
@@ -653,7 +776,9 @@ def cmd_task_new(args):
         if args.allow_duplicate and args.reason:
             state["duplicate_override_reason"] = args.reason
         save_state(task_id, state)
-        write_current(task_id)  # M-007: project lock hooks read to find "the" task
+        write_current(task_id)  # M-007: legacy global pointer (single-session fallback)
+        if session:
+            write_session_map(session, task_id)  # M-007: session-scoped pointer (HIGH-4)
 
         if args.idempotency_key:
             idempotency_store[args.idempotency_key] = {
@@ -1408,7 +1533,8 @@ def cmd_episode_close(args):
             out = f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})"
             idempotency_record(state, args.idempotency_key, fp, out)
             save_state(args.id, state)
-            clear_current_if_matches(args.id)  # M-007: release the project lock
+            clear_current_if_matches(args.id)  # M-007: release the global pointer
+            retarget_session_maps_on_close(args.id, state.get("parent"))
 
             warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
                                   f"close_revision={close_revision}")
@@ -1418,9 +1544,25 @@ def cmd_episode_close(args):
 # ---------- audit ----------
 
 def cmd_audit(args):
-    state = load_state(args.id)
+    # Coherent snapshot (review round 4 HIGH-1): every input the checks compare is read
+    # under project lock -> task lock (the canonical order every mutating verb uses), so
+    # a legitimate concurrent mutation can never land between two of our reads and
+    # masquerade as drift. The checks themselves run after both locks are released.
     cfg = load_config()
-    warroom_text = read_warroom_text(args.id)
+    task_dir(args.id)
+    with project_lock():
+        with task_lock(args.id):
+            with open(state_path(args.id), "rb") as f:
+                state_bytes = f.read()
+            state = migrate_state(json.loads(state_bytes.decode("utf-8")))
+            warroom_text = read_warroom_text(args.id)
+            parsed_eps, malformed_lines = scan_runs_jsonl_for_task(args.id)
+            journal_path = revisions_path(args.id)
+            journal_raw = None
+            if os.path.isfile(journal_path):
+                with open(journal_path, encoding="utf-8") as f:
+                    journal_raw = f.read()
+            snap = audit_task_snapshot()
     checks = []
 
     def add(name, ok, detail):
@@ -1455,7 +1597,7 @@ def cmd_audit(args):
         f"messages={len(state.get('messages', []))} warroom_has_msg_entries={has_msg_evidence}")
 
     # (d) episode closed but state not status=closed, and vice versa
-    episode_closed = bool(read_episode_lines_for_task(args.id))
+    episode_closed = bool(parsed_eps)
     state_closed = state.get("status") == "closed"
     d_ok = episode_closed == state_closed
     add("episode_vs_status", d_ok,
@@ -1529,7 +1671,6 @@ def cmd_audit(args):
     # that still reference this task. (state.status == "closed" with zero episode lines,
     # or the reverse, is already covered by check (d) episode_vs_status above — not
     # duplicated here.)
-    parsed_eps, malformed_lines = scan_runs_jsonl_for_task(args.id)
     revisions = [e.get("close_revision") for e in parsed_eps]
     j_bad = []
 
@@ -1560,25 +1701,23 @@ def cmd_audit(args):
     # .eaos/T-*/state.json parent field). Flags a dangling parent reference (points at a
     # task id that doesn't exist), a cycle (a task reachable from itself via parent
     # pointers), and a persisted tree-wide spawns.count total over the configured cap.
-    with project_lock():
-        snap = audit_task_snapshot()
-        root = audit_locate_root(args.id, snap) if args.id in snap else args.id
-        tree = audit_tree_members(root, snap)
+    root = audit_locate_root(args.id, snap) if args.id in snap else args.id
+    tree = audit_tree_members(root, snap)
 
-        dangling = []
-        for tid in tree:
-            parent = snap.get(tid, {}).get("parent")
-            if parent is not None and parent not in snap:
-                dangling.append(tid)
-        dangling.sort()
-        cycle_members = set()
-        for tid in tree:
-            cyc = audit_find_cycle(tid, snap)
-            if cyc:
-                cycle_members.update(cyc)
+    dangling = []
+    for tid in tree:
+        parent = snap.get(tid, {}).get("parent")
+        if parent is not None and parent not in snap:
+            dangling.append(tid)
+    dangling.sort()
+    cycle_members = set()
+    for tid in tree:
+        cyc = audit_find_cycle(tid, snap)
+        if cyc:
+            cycle_members.update(cyc)
 
-        cap = cfg["max_agent_spawns_per_task"]
-        total = sum(snap[tid]["spawns"] for tid in tree if tid in snap)
+    cap = cfg["max_agent_spawns_per_task"]
+    total = sum(snap[tid]["spawns"] for tid in tree if tid in snap)
 
     k_bad = []
     if dangling:
@@ -1600,16 +1739,23 @@ def cmd_audit(args):
     # state.json bytes (tamper/corruption/out-of-band edit — intended to fire on a
     # manual state.json edit); and malformed journal lines. A task with no journal yet
     # (it predates this feature and hasn't been mutated since) is ok, not a discrepancy.
-    journal_path = revisions_path(args.id)
+    # A task carrying the journal_enabled genesis marker (written by every save_state)
+    # with no journal or an empty one has lost history — that IS a discrepancy; only a
+    # task without the marker is a legacy pre-journal task (round 4 medium-1).
+    journal_enabled = bool(state.get("journal_enabled"))
     l_bad = []
     l_note = None
-    if not os.path.isfile(journal_path):
-        l_note = "no journal yet (pre-journal task)"
+    if journal_raw is None:
+        if journal_enabled:
+            l_bad.append("journal missing for a journal-enabled task "
+                         "(revisions.jsonl deleted?)")
+        else:
+            l_note = "no journal yet (pre-journal task)"
     else:
         entries = []
         malformed_journal = []
-        with open(journal_path, encoding="utf-8") as f:
-            for lineno, raw in enumerate(f, start=1):
+        if True:
+            for lineno, raw in enumerate(journal_raw.splitlines(), start=1):
                 raw = raw.strip()
                 if not raw:
                     continue
@@ -1626,6 +1772,9 @@ def cmd_audit(args):
 
         if malformed_journal:
             l_bad.append(f"malformed journal line(s): {malformed_journal}")
+        if not entries and not malformed_journal and journal_enabled:
+            l_bad.append("journal empty for a journal-enabled task "
+                         "(revisions.jsonl truncated?)")
 
         if entries:
             revs = [e["revision"] for e in entries]
@@ -1638,9 +1787,7 @@ def cmd_audit(args):
                 l_bad.append(f"state.revision {state_rev} < journal max {journal_max} "
                              f"(regression)")
 
-            with open(state_path(args.id), "rb") as f:
-                current_bytes = f.read()
-            current_sha = hashlib.sha256(current_bytes).hexdigest()
+            current_sha = hashlib.sha256(state_bytes).hexdigest()
             if entries[-1]["state_sha256"] != current_sha:
                 l_bad.append("latest journal state_sha256 does not match current "
                              "state.json (tamper/corruption/out-of-band edit)")
@@ -1663,6 +1810,33 @@ def cmd_audit(args):
             print(f"  [{status}] {c['name']}: {c['detail']}")
         print(f"{len(discrepancies)} discrepancy(ies) found" if discrepancies else "clean")
     sys.exit(1 if discrepancies else 0)
+
+# ---------- session (review round 4 HIGH-4) ----------
+
+def cmd_session(args):
+    sid = args.session or os.environ.get("EAOS_SESSION_ID") or None
+    if args.session_cmd == "bind":
+        check_session_id(sid)
+        with project_lock():
+            state = load_state(args.id)
+            if state.get("status") == "closed":
+                die(f"cannot bind session to closed task {args.id}", 1)
+            write_session_map(sid, args.id)
+        print(f"OK: session {sid} -> {args.id}")
+    elif args.session_cmd == "unbind":
+        check_session_id(sid)
+        with project_lock():
+            remove_session_map(sid)
+        print(f"OK: session {sid} unbound")
+    else:  # resolve — the hook's single entry point; exit 1 (printed reason) = fail open
+        if sid:
+            check_session_id(sid)
+        with project_lock():
+            tid, reason = resolve_hook_task(sid)
+        if not tid:
+            die(f"no task for hook: {reason}", 1)
+        print(tid)
+    sys.exit(0)
 
 # ---------- argparse wiring ----------
 
@@ -1695,6 +1869,9 @@ def build_parser():
                             help="free-text intended outcome, used in the fingerprint "
                                  "only (not the overlap-warning score)")
     p_task_new.add_argument("--allow-duplicate", action="store_true", dest="allow_duplicate")
+    p_task_new.add_argument("--session", default=None,
+                            help="host session id to bind to this task (.eaos/sessions/"
+                                 "<id>); defaults to $EAOS_SESSION_ID when set")
     p_task_new.add_argument("--reason", default=None)
     p_task_new.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_task_new.set_defaults(func=cmd_task_new)
@@ -1777,6 +1954,16 @@ def build_parser():
     p_episode_close.add_argument("--amend", action="store_true")
     p_episode_close.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_episode_close.set_defaults(func=cmd_episode_close)
+
+    p_session = sub.add_parser("session")
+    session_sub = p_session.add_subparsers(dest="session_cmd", required=True)
+    for name in ("bind", "unbind", "resolve"):
+        sp = session_sub.add_parser(name)
+        if name == "bind":
+            sp.add_argument("id")
+        sp.add_argument("--session", default=None,
+                        help="host session id; defaults to $EAOS_SESSION_ID")
+        sp.set_defaults(func=cmd_session)
 
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("id")

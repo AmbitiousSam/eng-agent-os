@@ -37,7 +37,9 @@ STABILIZE completes — exit 3 means the final report may only make a CONDITIONA
 "NOT claiming implementation complete", named unresolved); `eaos report` refusing (exit 1)
 means the task is NOT done, full stop; and a `hard_blocker` loop-back puts the task in
 `status: blocked` — every mutating verb refuses until a human resumes it via
-`eaos phase <id> <PHASE> --unblock --reason '<r>'`. When the CLI is absent, all prose behavior
+`eaos phase <id> <PHASE> --unblock --reason '<r>'`. Exit 4 is the one non-verdict: lock
+contention (another eaos process held the lock) — nothing was mutated, simply retry the same
+command; never read it as a ceiling or a gate. When the CLI is absent, all prose behavior
 below is unchanged — it is the fallback, not a stopgap.
 
 ---

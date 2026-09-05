@@ -10,7 +10,10 @@ Rules become computational: a ceiling is an exit code, not a sentence the model 
   defines. Two files per task: `warroom.md` (human-readable log, append-only) and
   `state.json` (machine state: counters, gates, criteria, spawns).
 - Every command prints a one-line machine-readable result. Exit 0 = allowed/ok,
-  exit 1 = ceiling hit / gate unmet / invalid, exit 2 = usage error.
+  exit 1 = ceiling hit / gate unmet / invalid, exit 2 = usage error, exit 3 = CONDITIONAL
+  (`verify --require` only), exit 4 = infrastructure (lock contention — nothing mutated,
+  retry; never a verdict, hooks fail open on it). Codes 3/4 were added by the §11
+  consistency layer and review round 4 respectively.
 - Timestamps: ISO-8601 local. Message ids: msg-001, msg-002… per task, assigned by the CLI.
 
 ## Commands

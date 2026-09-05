@@ -94,7 +94,7 @@ mechanisms:
     motivating_evidence: [T-017 — CLI verbs bypassed mid-run (messages:0, loopbacks:0 despite re-review)]
     expected_effect: host interception reduces bookkeeping bypass without model cooperation
     primary_metric: audit_discrepancies_per_run
-    guardrails: [hook_failure_rate]
+    guardrails: [hook_failure_rate, false_block_rate]   # false_block = a hook exit 2 not backed by a policy verdict (round-4 HIGH-1/2 class)
     owner: adapters
     evaluation_due_after_runs: 5
     removal_condition: bypass rate unchanged vs audit-only enforcement

@@ -8,12 +8,17 @@
 # fail-closed budget/audit gate on the host, which is a per-user decision, not a default.
 #
 # Merges into settings.json (never clobbers): adds a PreToolUse entry matching
-# Task|Agent and a Stop entry, both invoking "<eaos-hook.sh> <mode>". Idempotent — a
-# second run detects our own entries by their exact command string and adds nothing
-# new. Backs up settings.json to settings.json.bak-<epoch> before any real change (no
-# backup, no write, on a true no-op re-run). `--uninstall` removes only entries whose
-# command references eaos-hook.sh, leaving every other hook (including a pre-existing
-# unrelated one on the same event) untouched.
+# Task|Agent, a PostToolUse entry matching Bash (binds the session to the task
+# `eaos task new` just created — round 4 HIGH-4) and a Stop entry, all invoking
+# "<eaos-hook.sh> <mode>" with the path shell-quoted. Idempotent — a second run detects
+# our own entries by their exact command string and adds nothing new. Backs up
+# settings.json to settings.json.bak-<ns>-<pid> (exclusive create, mode 0600) before any
+# real change (no backup, no write, on a true no-op re-run) and PRESERVES the original
+# file mode on the rewritten settings.json (round 4 HIGH-3: a 0600 file stays 0600).
+# Refuses — leaving the file untouched — when an existing hooks/PreToolUse/PostToolUse/
+# Stop value has an unexpected shape (round 4 medium-3). `--uninstall` removes only
+# entries whose command references eaos-hook.sh, leaving every other hook (including a
+# pre-existing unrelated one on the same event) untouched.
 #
 # Usage: scripts/install-eaos-hooks.sh [--uninstall]
 set -uo pipefail
@@ -44,6 +49,8 @@ mkdir -p "$CLAUDE_DIR"
 RESULT="$(HOOK_PATH="$HOOK_PATH" SETTINGS_PATH="$SETTINGS_PATH" MODE="$mode" python3 - <<'PYEOF'
 import json
 import os
+import shlex
+import stat
 import sys
 import time
 
@@ -51,9 +58,18 @@ settings_path = os.environ["SETTINGS_PATH"]
 hook_path = os.environ["HOOK_PATH"]
 mode = os.environ["MODE"]
 
-PRETOOL_CMD = f"{hook_path} pretool"
-STOP_CMD = f"{hook_path} stop"
+QUOTED = shlex.quote(hook_path)   # a CLAUDE_HOME with spaces must still exec (medium-4)
+PRETOOL_CMD = f"{QUOTED} pretool"
+POSTTOOL_CMD = f"{QUOTED} posttool"
+STOP_CMD = f"{QUOTED} stop"
 PRETOOL_MATCHER = "Task|Agent"
+POSTTOOL_MATCHER = "Bash"
+EVENTS = (("PreToolUse", PRETOOL_CMD, PRETOOL_MATCHER),
+          ("PostToolUse", POSTTOOL_CMD, POSTTOOL_MATCHER),
+          ("Stop", STOP_CMD, None))
+
+class SchemaError(Exception):
+    pass
 
 def load_settings():
     if not os.path.isfile(settings_path):
@@ -70,44 +86,45 @@ def entry_commands(entry):
 def has_our_command(entry, cmd):
     return cmd in entry_commands(entry)
 
+def check_shape(settings):
+    # Never "repair" a value we do not understand — an unexpected shape means a human
+    # (or another tool) put something there; silently replacing it loses their data.
+    if not isinstance(settings, dict):
+        raise SchemaError("settings.json top level is not a JSON object")
+    hooks = settings.get("hooks")
+    if hooks is None:
+        return
+    if not isinstance(hooks, dict):
+        raise SchemaError('"hooks" exists but is not an object')
+    for event, _cmd, _m in EVENTS:
+        if event in hooks and not isinstance(hooks[event], list):
+            raise SchemaError(f'"hooks.{event}" exists but is not a list')
+
 def install(settings):
+    check_shape(settings)
     changed = False
+    actions = []
     hooks = settings.setdefault("hooks", {})
-
-    pre_list = hooks.setdefault("PreToolUse", [])
-    if not isinstance(pre_list, list):
-        pre_list = []
-        hooks["PreToolUse"] = pre_list
-    if not any(has_our_command(e, PRETOOL_CMD) for e in pre_list if isinstance(e, dict)):
-        pre_list.append({
-            "matcher": PRETOOL_MATCHER,
-            "hooks": [{"type": "command", "command": PRETOOL_CMD}],
-        })
-        changed = True
-
-    stop_list = hooks.setdefault("Stop", [])
-    if not isinstance(stop_list, list):
-        stop_list = []
-        hooks["Stop"] = stop_list
-    if not any(has_our_command(e, STOP_CMD) for e in stop_list if isinstance(e, dict)):
-        stop_list.append({
-            "hooks": [{"type": "command", "command": STOP_CMD}],
-        })
-        changed = True
-
-    return settings, changed, [
-        f"PreToolUse -> {PRETOOL_CMD} (matcher: {PRETOOL_MATCHER})",
-        f"Stop -> {STOP_CMD}",
-    ]
+    for event, our_cmd, matcher in EVENTS:
+        lst = hooks.setdefault(event, [])
+        if not any(has_our_command(e, our_cmd) for e in lst if isinstance(e, dict)):
+            entry = {"hooks": [{"type": "command", "command": our_cmd}]}
+            if matcher:
+                entry = {"matcher": matcher, **entry}
+            lst.append(entry)
+            changed = True
+        actions.append(f"{event} -> {our_cmd}" + (f" (matcher: {matcher})" if matcher else ""))
+    return settings, changed, actions
 
 def uninstall(settings):
+    check_shape(settings)
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return settings, False, []
 
     changed = False
     removed = []
-    for event, our_cmd in (("PreToolUse", PRETOOL_CMD), ("Stop", STOP_CMD)):
+    for event, our_cmd, _matcher in EVENTS:
         entries = hooks.get(event)
         if not isinstance(entries, list):
             continue
@@ -142,27 +159,46 @@ before = load_settings()
 import copy
 working = copy.deepcopy(before)
 
-if mode == "install":
-    after, changed, actions = install(working)
-else:
-    after, changed, actions = uninstall(working)
+try:
+    if mode == "install":
+        after, changed, actions = install(working)
+    else:
+        after, changed, actions = uninstall(working)
+except SchemaError as e:
+    print(f"REFUSED unexpected settings.json shape: {e} — file left untouched", file=sys.stderr)
+    sys.exit(1)
 
 if not changed:
     print("NOCHANGE")
     sys.exit(0)
 
+# Preserve the original mode (a private 0600 settings file must stay 0600 — HIGH-3);
+# backups and the replacement are created 0600 + O_EXCL so they are never world-readable
+# for even an instant, and two runs inside one second cannot overwrite one backup
+# (medium-2: nanosecond + pid name, exclusive create). Ownership: unchanged by design —
+# the file is rewritten by the same user that owns it; chown would need root.
+orig_mode = None
 if os.path.isfile(settings_path):
-    backup_path = f"{settings_path}.bak-{int(time.time())}"
-    with open(settings_path, encoding="utf-8") as f:
-        original_text = f.read()
-    with open(backup_path, "w", encoding="utf-8") as f:
-        f.write(original_text)
+    orig_mode = stat.S_IMODE(os.stat(settings_path).st_mode)
+    with open(settings_path, "rb") as f:
+        original_bytes = f.read()
+    backup_path = f"{settings_path}.bak-{time.time_ns()}-{os.getpid()}"
+    fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, original_bytes)
+    finally:
+        os.close(fd)
     print(f"BACKUP {backup_path}")
 
 tmp_path = f"{settings_path}.tmp.{os.getpid()}"
-with open(tmp_path, "w", encoding="utf-8") as f:
-    json.dump(after, f, indent=2)
-    f.write("\n")
+payload = (json.dumps(after, indent=2) + "\n").encode("utf-8")
+fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    os.write(fd, payload)
+finally:
+    os.close(fd)
+if orig_mode is not None:
+    os.chmod(tmp_path, orig_mode)
 os.replace(tmp_path, settings_path)
 
 for a in actions:

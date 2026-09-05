@@ -1392,8 +1392,18 @@ class TestRevisionMonotonicity(EaosTestCase):
         tid = self.new_task()
         run(self.cwd, "phase", tid, "DESIGN")  # revision 2; journal has [1, 2]
 
+        # A TRUE legacy task: written before the journal existed, so it carries neither
+        # a revisions.jsonl nor the journal_enabled genesis marker. (Deleting only the
+        # journal is now the loss case — see TestJournalLoss.)
         journal_path = os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl")
         os.remove(journal_path)
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        del state["journal_enabled"]
+        with open(state_path, "w") as f:
+            json.dump(state, f, indent=2)
+            f.write("\n")
 
         rc, check = self.audit_check(tid)
         self.assertEqual(rc, 0)
@@ -1429,6 +1439,175 @@ class TestRevisionMonotonicity(EaosTestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(check["ok"])
         self.assertIn("not strictly increasing", check["detail"])
+
+
+class TestJournalLoss(EaosTestCase):
+    """Round 4 medium-1: a journal-enabled task (genesis marker written by every
+    save_state) whose revisions.jsonl is missing or empty has LOST history."""
+
+    def audit_check(self, tid):
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        by_name = {c["name"]: c for c in json.loads(out)["checks"]}
+        return rc, by_name["revision_monotonicity"]
+
+    def test_state_carries_genesis_marker(self):
+        self.init()
+        tid = self.new_task()
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            self.assertTrue(json.load(f)["journal_enabled"])
+
+    def test_truncated_journal_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        open(os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl"), "w").close()
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("journal empty for a journal-enabled task", check["detail"])
+
+    def test_deleted_journal_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        os.remove(os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl"))
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("journal missing for a journal-enabled task", check["detail"])
+
+
+class TestAuditCoherentSnapshot(EaosTestCase):
+    """Round 4 HIGH-1: legitimate concurrent mutations must never read as drift.
+    Before the fix this failed ~100/100 in the reviewer's harness."""
+
+    def test_concurrent_spawns_never_false_fail_audit(self):
+        self.init(max_spawns=1000)
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")  # spawning in INTAKE is real drift (check b)
+        stop = threading.Event()
+        errors = []
+
+        def mutate():
+            i = 0
+            while not stop.is_set() and i < 150:
+                rc, out, err = run(self.cwd, "spawn", tid, "--agent", f"dev{i}")
+                if rc not in (0, 4):
+                    errors.append((rc, out, err))
+                i += 1
+
+        t = threading.Thread(target=mutate)
+        t.start()
+        failures = []
+        for _ in range(40):
+            rc, out, err = run(self.cwd, "audit", tid)
+            if rc == 1:
+                failures.append(out)
+        stop.set()
+        t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(failures, [], f"false drift during legitimate spawns: {failures[:2]}")
+
+
+class TestLockContentionExitCode(EaosTestCase):
+    """Round 4 HIGH-2: lock contention is infrastructure (exit 4), never a policy verdict
+    (exit 1) — a hook must be able to tell them apart and fail open on 4."""
+
+    def test_held_project_lock_exits_4_and_mutates_nothing(self):
+        self.init()
+        tid = self.new_task()
+        lock = os.path.join(self.cwd, ".eaos", ".lock")
+        with open(lock, "w") as f:
+            f.write("999999")
+        try:
+            rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer")
+            self.assertEqual(rc, 4, err)
+            self.assertIn("lock busy", err)
+            rc, out, err = run(self.cwd, "audit", tid)
+            self.assertEqual(rc, 4, err)
+        finally:
+            os.remove(lock)
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertIn("Spawns: 0/", out)
+
+
+class TestSessionScopedCurrent(EaosTestCase):
+    """Round 4 HIGH-4: .eaos/sessions/<session-id> maps a host session to ITS task;
+    `session resolve` is the one rule a hook uses, and it fails open on ambiguity."""
+
+    def resolve(self, sid=None):
+        args = ["session", "resolve"] + (["--session", sid] if sid else [])
+        rc, out, err = run(self.cwd, *args)
+        return rc, out.strip(), err.strip()
+
+    def test_two_sessions_attribute_to_their_own_tasks(self):
+        self.init()
+        rc, t1, _ = run(self.cwd, "task", "new", "alpha migration", "--session", "s1")
+        rc, t2, _ = run(self.cwd, "task", "new", "beta dashboard", "--session", "s2")
+        t1, t2 = t1.strip().splitlines()[-1], t2.strip().splitlines()[-1]
+        self.assertEqual(self.resolve("s1")[1], t1)
+        self.assertEqual(self.resolve("s2")[1], t2)
+        # global CURRENT still points at the latest — the legacy pointer is not the rule
+        with open(os.path.join(self.cwd, ".eaos", "CURRENT")) as f:
+            self.assertEqual(f.read().strip(), t2)
+
+    def test_unmapped_session_with_two_active_tasks_fails_open(self):
+        self.init()
+        run(self.cwd, "task", "new", "one", "--session", "s1")
+        run(self.cwd, "task", "new", "two", "--session", "s2")
+        rc, out, err = self.resolve("s3")
+        self.assertEqual(rc, 1)
+        self.assertIn("ambiguous", err)
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "s3")))
+
+    def test_unmapped_session_binds_when_single_active_task(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = self.resolve("s9")
+        self.assertEqual((rc, out), (0, tid))
+        with open(os.path.join(self.cwd, ".eaos", "sessions", "s9")) as f:
+            self.assertEqual(f.read().strip(), tid)
+
+    def test_no_session_id_uses_current_only_when_unambiguous(self):
+        self.init()
+        tid = self.new_task()
+        self.assertEqual(self.resolve()[1], tid)
+        self.new_task("another")
+        rc, out, err = self.resolve()
+        self.assertEqual(rc, 1)
+        self.assertIn("ambiguous", err)
+
+    def test_env_var_binds_session_on_task_new(self):
+        self.init()
+        env = dict(os.environ, EAOS_SESSION_ID="env-sess")
+        r = subprocess.run([sys.executable, EAOS, "task", "new", "env bound"],
+                           cwd=self.cwd, capture_output=True, text=True, env=env)
+        tid = r.stdout.strip()
+        self.assertEqual(self.resolve("env-sess")[1], tid)
+
+    def test_close_retargets_session_to_active_parent_else_removes(self):
+        self.init()
+        parent = self.new_task("parent")
+        rc, child, _ = run(self.cwd, "task", "new", "child", "--parent", parent,
+                           "--session", "s1")
+        child = child.strip()
+        self.assertEqual(self.resolve("s1")[1], child)
+        run(self.cwd, "episode", "close", child)
+        self.assertEqual(self.resolve("s1")[1], parent)
+        run(self.cwd, "episode", "close", parent)
+        rc, out, err = self.resolve("s1")
+        self.assertEqual(rc, 1)
+        self.assertIn("no active task", err)
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "s1")))
+
+    def test_bind_refuses_closed_task_and_rejects_bad_ids(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "episode", "close", tid)
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "s1")
+        self.assertEqual(rc, 1)
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "../evil")
+        self.assertEqual(rc, 2)
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", ".hidden")
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":

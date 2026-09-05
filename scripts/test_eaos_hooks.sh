@@ -227,12 +227,137 @@ assert_eq "(h) pre-existing unrelated hook survives uninstall" "yes" "$pre_exist
 bash "$INSTALL" --uninstall >/tmp/eaos_uninstall_test2.$$ 2>&1
 assert_eq "(h) repeat uninstall exits 0 (no-op)" "0" "$?"
 
+# install + (no-op re-install) + uninstall + (no-op) = exactly TWO real changes, so
+# exactly two backups — a one-second-resolution name would have collapsed them (medium-2).
 n_backups="$(ls "$HDIR"/settings.json.bak-* 2>/dev/null | wc -l | tr -d ' ')"
-if [ "${n_backups:-0}" -ge 1 ]; then ok "(h) at least one settings.json backup created"; \
-else bad "(h) expected a settings.json.bak-<ts> backup file"; fi
+assert_eq "(h) one backup per real change, none collide" "2" "$n_backups"
 
 rm -f /tmp/eaos_install_test.$$ /tmp/eaos_install_test2.$$ /tmp/eaos_uninstall_test.$$ /tmp/eaos_uninstall_test2.$$
 rm -rf "$HDIR"
+
+echo "=== (i) hostile tool_input never reaches a shell (round 4 medium-5) ==="
+new_project 5
+TID="$(new_task "$PROJ")"
+CANARY="$PROJ/canary-was-executed"
+hostile="\$(touch $CANARY); \`touch $CANARY\`; x'; touch $CANARY; 'y"
+hostile_json="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Task", "tool_input": {"subagent_type": sys.argv[1]},
+                  "cwd": sys.argv[2], "tool_use_id": "tu-i"}))
+' "$hostile" "$PROJ")"
+run_hook pretool "$hostile_json"
+assert_eq "(i) exit code 0" "0" "$HOOK_RC"
+if [ -e "$CANARY" ]; then bad "(i) canary file was created — injection executed"; \
+else ok "(i) canary not created — hostile text never executed"; fi
+assert_eq "(i) spawn still recorded" "1" "$(spawns_of "$PROJ" "$TID")"
+stored="$(grep -c 'touch' "$PROJ/.eaos/$TID/warroom.md")"
+if [ "$stored" -ge 1 ]; then ok "(i) hostile text stored literally in warroom"; \
+else bad "(i) hostile agent name missing from warroom"; fi
+rm -rf "$PROJ"
+
+echo "=== (j) lock contention is infrastructure -> both modes fail OPEN (round 4 HIGH-2) ==="
+new_project 5
+TID="$(new_task "$PROJ")"
+echo 999999 > "$PROJ/.eaos/.lock"          # fresh lock held by "another process"
+run_hook pretool "$(pretool_json "$PROJ" Task developer "tu-j")"
+assert_eq "(j) pretool exit 0 under held lock" "0" "$HOOK_RC"
+assert_empty "(j) pretool stderr silent" "$HOOK_ERR"
+run_hook stop "$(printf '{"cwd":"%s","session_id":"sj"}' "$PROJ")"
+assert_eq "(j) stop exit 0 under held lock (incomplete audit is not drift)" "0" "$HOOK_RC"
+assert_empty "(j) stop stderr silent" "$HOOK_ERR"
+rm -f "$PROJ/.eaos/.lock"
+assert_eq "(j) nothing recorded while locked" "0" "$(spawns_of "$PROJ" "$TID")"
+rm -rf "$PROJ"
+
+echo "=== (k) two sessions, one checkout -> each hook fire lands on ITS task (round 4 HIGH-4) ==="
+new_project 5
+T1="$(cd "$PROJ" && python3 "$EAOS" task new "alpha migration" --session s1)"
+T2="$(cd "$PROJ" && python3 "$EAOS" task new "beta dashboard" --session s2 | tail -1)"
+assert_eq "(k) global CURRENT points at the latest task" "$T2" "$(cat "$PROJ/.eaos/CURRENT")"
+( cd "$PROJ" && python3 "$EAOS" phase "$T1" DESIGN >/dev/null && python3 "$EAOS" phase "$T2" DESIGN >/dev/null )
+run_hook pretool "$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"developer"},"cwd":"%s","tool_use_id":"tu-k1","session_id":"s1"}' "$PROJ")"
+assert_eq "(k) session one hook exit 0" "0" "$HOOK_RC"
+assert_eq "(k) session one spawn on T1" "1" "$(spawns_of "$PROJ" "$T1")"
+assert_eq "(k) nothing on T2" "0" "$(spawns_of "$PROJ" "$T2")"
+run_hook pretool "$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"qa"},"cwd":"%s","tool_use_id":"tu-k2","session_id":"s2"}' "$PROJ")"
+assert_eq "(k) session two spawn on T2" "1" "$(spawns_of "$PROJ" "$T2")"
+# a THIRD session with no mapping and two active tasks: ambiguous -> fail open, no guess
+run_hook pretool "$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"dev"},"cwd":"%s","tool_use_id":"tu-k3","session_id":"s3"}' "$PROJ")"
+assert_eq "(k) unmapped session exit 0" "0" "$HOOK_RC"
+assert_eq "(k) unmapped session recorded nothing on T1" "1" "$(spawns_of "$PROJ" "$T1")"
+assert_eq "(k) unmapped session recorded nothing on T2" "1" "$(spawns_of "$PROJ" "$T2")"
+# stop for s1 audits T1 (drift injected on T1 only), stop for s2 stays clean
+python3 - "$PROJ/.eaos/$T1/state.json" <<'PYEND'
+import json, sys
+p = sys.argv[1]
+s = json.load(open(p)); s["spawns"]["count"] = 9
+json.dump(s, open(p, "w"))
+PYEND
+run_hook stop "$(printf '{"cwd":"%s","session_id":"s2"}' "$PROJ")"
+assert_eq "(k) stop for s2 clean (its task is fine)" "0" "$HOOK_RC"
+run_hook stop "$(printf '{"cwd":"%s","session_id":"s1"}' "$PROJ")"
+assert_eq "(k) stop for s1 blocks on T1 drift" "2" "$HOOK_RC"
+assert_contains "(k) stop for s1 names T1" "$HOOK_ERR" "$T1"
+rm -rf "$PROJ"
+
+echo "=== (l) posttool binds the session the moment 'eaos task new' runs ==="
+new_project 5
+TL="$(new_task "$PROJ")"                    # created WITHOUT --session (as the model does)
+post_json="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "session_id": "sl", "cwd": sys.argv[1],
+  "tool_use_id": "tu-l", "tool_input": {"command": "python3 ~/.claude/eaos/bin/eaos task new \"x\" --kind feature"},
+  "tool_response": {"stdout": sys.argv[2] + "\n", "stderr": "", "exit_code": 0}}))
+' "$PROJ" "$TL")"
+run_hook posttool "$post_json"
+assert_eq "(l) posttool exit 0" "0" "$HOOK_RC"
+assert_eq "(l) session mapped to the new task" "$TL" "$(cat "$PROJ/.eaos/sessions/sl" 2>/dev/null)"
+# an unrelated Bash call binds nothing
+run_hook posttool "$(printf '{"tool_name":"Bash","session_id":"sm","cwd":"%s","tool_use_id":"tu-l2","tool_input":{"command":"ls"},"tool_response":{"stdout":"T-999\\n"}}' "$PROJ")"
+assert_eq "(l) non-task-new Bash exit 0" "0" "$HOOK_RC"
+if [ -e "$PROJ/.eaos/sessions/sm" ]; then bad "(l) unrelated Bash call created a mapping"; \
+else ok "(l) unrelated Bash call binds nothing"; fi
+rm -rf "$PROJ"
+
+echo "=== (m) installer: preserves 0600, refuses malformed hooks, quotes paths with spaces ==="
+HDIR="$(mktemp -d)"
+export CLAUDE_HOME="$HDIR"
+mkdir -p "$CLAUDE_HOME/eaos/bin"; cp "$HOOK" "$CLAUDE_HOME/eaos/bin/eaos-hook.sh"
+printf '{"env":{"SECRET":"1"}}\n' > "$CLAUDE_HOME/settings.json"; chmod 600 "$CLAUDE_HOME/settings.json"
+bash "$INSTALL" >/dev/null 2>&1
+assert_eq "(m) install exit 0" "0" "$?"
+mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+assert_eq "(m) settings.json stays 0600" "600" "$(mode_of "$CLAUDE_HOME/settings.json")"
+bk="$(ls "$HDIR"/settings.json.bak-* | head -1)"
+assert_eq "(m) backup is 0600" "600" "$(mode_of "$bk")"
+n_post="$(python3 -c "
+import json
+d = json.load(open('$CLAUDE_HOME/settings.json'))
+print(sum(1 for e in d['hooks'].get('PostToolUse', []) for h in e.get('hooks', [])
+          if 'eaos-hook.sh posttool' in h.get('command', '') and e.get('matcher') == 'Bash'))
+")"
+assert_eq "(m) PostToolUse Bash entry installed" "1" "$n_post"
+# malformed: PreToolUse is an object, not a list -> refuse, leave untouched
+printf '{"hooks":{"PreToolUse":{"keep":"me"}}}\n' > "$CLAUDE_HOME/settings.json"
+bash "$INSTALL" >/dev/null 2>/tmp/eaos_m_err.$$
+assert_eq "(m) malformed shape -> exit 1" "1" "$?"
+assert_contains "(m) refusal names the field" "$(cat /tmp/eaos_m_err.$$)" "hooks.PreToolUse"
+assert_eq "(m) file left untouched" '{"hooks":{"PreToolUse":{"keep":"me"}}}' "$(cat "$CLAUDE_HOME/settings.json")"
+rm -f /tmp/eaos_m_err.$$
+rm -rf "$HDIR"
+# path with a space: the generated command must still exec
+HDIR="$(mktemp -d)/home with space"
+mkdir -p "$HDIR/eaos/bin"; export CLAUDE_HOME="$HDIR"
+printf '#!/bin/sh\nexit 0\n' > "$HDIR/eaos/bin/eaos-hook.sh"; chmod +x "$HDIR/eaos/bin/eaos-hook.sh"
+bash "$INSTALL" >/dev/null 2>&1
+cmd="$(python3 -c "
+import json
+d = json.load(open('$HDIR/settings.json'))
+print(d['hooks']['Stop'][0]['hooks'][0]['command'])
+")"
+sh -c "$cmd" </dev/null >/dev/null 2>&1
+assert_eq "(m) quoted hook command execs from a path with spaces" "0" "$?"
+rm -rf "$(dirname "$HDIR")"
 
 echo ""
 echo "========================================"
