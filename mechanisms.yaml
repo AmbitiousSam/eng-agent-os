@@ -90,7 +90,7 @@ mechanisms:
   - id: M-007
     name: hooks-as-accelerators
     reliability: execution
-    status: proposed
+    status: instrumented
     motivating_evidence: [T-017 — CLI verbs bypassed mid-run (messages:0, loopbacks:0 despite re-review)]
     expected_effect: host interception reduces bookkeeping bypass without model cooperation
     primary_metric: audit_discrepancies_per_run

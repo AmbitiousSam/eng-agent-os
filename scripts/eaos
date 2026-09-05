@@ -177,6 +177,38 @@ def read_warroom_text(task_id):
 def runs_path():
     return os.path.join(eaos_dir(), "runs.jsonl")
 
+# ---------- CURRENT (project lock — M-007 / spec §11 hooks-as-accelerators) ----------
+# .eaos/CURRENT names the task a host hook should act on without the model naming it
+# explicitly: `task new` points it at the task just created; `episode close` clears it
+# once that same task closes. It is advisory bookkeeping (like everything else in this
+# file, the wrapper remains the authoritative mutation path) — a plain text file holding
+# one task id, written atomically the same way state.json is.
+
+def current_path():
+    return os.path.join(eaos_dir(), "CURRENT")
+
+def read_current():
+    p = current_path()
+    if not os.path.isfile(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        val = f.read().strip()
+    return val or None
+
+def write_current(task_id):
+    p = current_path()
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(task_id + "\n")
+    os.replace(tmp, p)
+
+def clear_current_if_matches(task_id):
+    if read_current() == task_id:
+        try:
+            os.remove(current_path())
+        except OSError:
+            pass
+
 def scan_runs_jsonl_for_task(task_id):
     """Read runs.jsonl once and split, for this task, cleanly-parsed episode lines from
     malformed ones that still reference the task. A malformed line is best-effort
@@ -621,6 +653,7 @@ def cmd_task_new(args):
         if args.allow_duplicate and args.reason:
             state["duplicate_override_reason"] = args.reason
         save_state(task_id, state)
+        write_current(task_id)  # M-007: project lock hooks read to find "the" task
 
         if args.idempotency_key:
             idempotency_store[args.idempotency_key] = {
@@ -1120,12 +1153,17 @@ def cmd_verify(args):
 # ---------- status ----------
 
 def cmd_status(args):
-    state = load_state(args.id)
+    current = read_current()
+    task_id = args.id or current
+    if not task_id:
+        die("no CURRENT task set — pass an id: eaos status <id>", 2)
+    state = load_state(task_id)
     cfg_path = config_path()
     cfg = json.load(open(cfg_path, encoding="utf-8")) if os.path.isfile(cfg_path) \
         else DEFAULT_CONFIG
 
     print(f"Task: {state['id']} — {state['title']}")
+    print(f"CURRENT: {current}" if current else "CURRENT: (none)")
     print(f"Status: {state['status']}   Phase: {state['phase']}")
     if state.get("status") == "blocked" and state.get("blocked"):
         b = state["blocked"]
@@ -1370,6 +1408,7 @@ def cmd_episode_close(args):
             out = f"OK: {args.id} closed (verdict={verdict}, close_revision={close_revision})"
             idempotency_record(state, args.idempotency_key, fp, out)
             save_state(args.id, state)
+            clear_current_if_matches(args.id)  # M-007: release the project lock
 
             warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
                                   f"close_revision={close_revision}")
@@ -1723,7 +1762,8 @@ def build_parser():
     p_verify.set_defaults(func=cmd_verify)
 
     p_status = sub.add_parser("status")
-    p_status.add_argument("id")
+    p_status.add_argument("id", nargs="?", default=None,
+                          help="task id; defaults to .eaos/CURRENT if omitted")
     p_status.set_defaults(func=cmd_status)
 
     p_report = sub.add_parser("report")

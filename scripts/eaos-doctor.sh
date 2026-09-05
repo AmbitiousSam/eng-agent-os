@@ -82,6 +82,19 @@ else
   note "ponytail not detected (optional) — the ladder is baked into the developer persona anyway. /plugin install ponytail@ponytail"
 fi
 
+echo "Hook accelerators (M-007, optional):"
+if [ -e "$CLAUDE_DIR/eaos/bin/eaos-hook.sh" ]; then
+  pass "eaos-hook.sh installed (~/.claude/eaos/bin/eaos-hook.sh)"
+else
+  note "eaos-hook.sh not installed — run ./setup.sh"
+fi
+if [ -f "$CLAUDE_DIR/settings.json" ] && grep -q "eaos-hook.sh" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+  pass "hooks wired into settings.json — spawn/audit run without model cooperation"
+else
+  note "hooks not wired into settings.json (optional) — prompt+audit only until you" \
+       "opt in with: ./scripts/install-eaos-hooks.sh"
+fi
+
 echo "Project readiness (cwd):"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   pass "inside a git repo ($(git rev-parse --show-toplevel 2>/dev/null))"

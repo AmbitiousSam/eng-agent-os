@@ -102,6 +102,14 @@ say "Installing eaos runtime CLI -> $CONFIG_DIR/bin"
 install_file "$EAOS_DIR/scripts/eaos" "$CONFIG_DIR/bin/eaos"
 chmod +x "$CONFIG_DIR/bin/eaos"
 
+# 5a-hooks) Install the hook accelerator SCRIPT (M-007, mechanisms.yaml) but never wire it
+#     into settings.json here — that's an opt-in, per-user decision (a real fail-closed gate
+#     on spawn budget/audit drift), made via scripts/install-eaos-hooks.sh, not a setup default.
+say "Installing eaos hook accelerator -> $CONFIG_DIR/bin"
+install_file "$EAOS_DIR/scripts/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
+chmod +x "$CONFIG_DIR/bin/eaos-hook.sh"
+say "  (not wired into settings.json — opt in with: ./scripts/install-eaos-hooks.sh)"
+
 # 5b) Seed the memory index so a fresh project has something to copy on its first run
 #     (memory/README.md: index.md is "always loaded" — the command's Step 0 seeds from here).
 say "Seeding memory index -> $CONFIG_DIR/memory-seed"
