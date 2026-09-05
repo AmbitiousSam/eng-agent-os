@@ -127,6 +127,9 @@ def load_state(task_id):
         state = json.load(f)
     return migrate_state(state)
 
+def revisions_path(task_id):
+    return os.path.join(task_dir(task_id), "revisions.jsonl")
+
 def save_state(task_id, state):
     # atomic: write to a sibling temp file, then rename over the real one — a crash
     # mid-write leaves the previous-valid state.json, never a partial/corrupt one.
@@ -134,10 +137,31 @@ def save_state(task_id, state):
     state["revision"] = state.get("revision", 0) + 1
     p = state_path(task_id)
     tmp = f"{p}.tmp.{os.getpid()}"
+    payload = json.dumps(state, indent=2) + "\n"
+    payload_bytes = payload.encode("utf-8")
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-        f.write("\n")
+        f.write(payload)
     os.replace(tmp, p)
+
+    # Revision journal (spec §11 / audit check l): one JSON line per save_state call,
+    # appended under the SAME task lock the caller already holds — this function never
+    # acquires a lock of its own. A task that predates the journal simply gets its first
+    # line the moment its next mutation runs, seeded at whatever revision that mutation
+    # lands on (audit reports that as "journal started at revision N", not a
+    # discrepancy). Single os.write append — cheap, and matches the runs.jsonl append
+    # style elsewhere in this file. Per-task and bounded by that task's own mutation
+    # count; no rotation needed.
+    entry = {
+        "revision": state["revision"],
+        "at": now_iso(),
+        "state_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+    }
+    line = (json.dumps(entry) + "\n").encode("utf-8")
+    fd = os.open(revisions_path(task_id), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
 
 def warroom_log(task_id, line):
     with open(warroom_path(task_id), "a", encoding="utf-8") as f:
@@ -732,6 +756,74 @@ def tree_spawn_total(task_id):
     tree = tree_task_ids(root)
     total = sum(load_state(tid).get("spawns", {}).get("count", 0) for tid in tree)
     return total, root
+
+# ---------- audit check (k) helpers: parent-tree topology ----------
+# Unlike find_root/tree_task_ids above (which assume a healthy tree and will die() via
+# load_state on a dangling parent reference), audit must survive and report exactly that
+# kind of corruption, so it gets its own in-memory-only, non-dying versions built from a
+# single upfront snapshot of every task's {parent, spawns.count}.
+
+def audit_task_snapshot():
+    """One-pass scan of every .eaos/T-*/state.json for its parent + spawns.count. A task
+    whose state.json fails to load is simply absent from the map (not counted as
+    dangling) — the same best-effort tolerance tree_task_ids already applies."""
+    snap = {}
+    for tid in all_task_ids():
+        try:
+            st = load_state(tid)
+        except SystemExit:
+            continue
+        snap[tid] = {"parent": st.get("parent"),
+                     "spawns": st.get("spawns", {}).get("count", 0)}
+    return snap
+
+def audit_locate_root(task_id, snap):
+    """Walk parent pointers in-memory (no disk I/O, never dies). Stops — and reports
+    that node as the effective root for tree-traversal purposes — at whichever comes
+    first: no parent (a true root), a parent missing from `snap` (dangling reference),
+    or a repeated node (cycle). The dangling/cycle conditions themselves are detected
+    and reported separately; this just guarantees audit always terminates."""
+    seen = []
+    cur = task_id
+    while True:
+        if cur in seen:
+            return cur
+        seen.append(cur)
+        parent = snap.get(cur, {}).get("parent")
+        if not parent or parent not in snap:
+            return cur
+        cur = parent
+
+def audit_tree_members(root_id, snap):
+    """Descendant set of root_id via child pointers (mirrors tree_task_ids), operating
+    purely on the snapshot so it tolerates dangling/cyclic data without recursing into
+    load_state."""
+    tree = set()
+    def add(tid):
+        if tid in tree:
+            return
+        tree.add(tid)
+        for child, info in snap.items():
+            if info.get("parent") == tid:
+                add(child)
+    add(root_id)
+    return tree
+
+def audit_find_cycle(task_id, snap):
+    """Walk the parent chain from task_id. Returns the sorted list of task ids forming a
+    cycle if the chain revisits a node before hitting a true root or a dangling parent;
+    otherwise None."""
+    chain = []
+    cur = task_id
+    while cur is not None:
+        if cur in chain:
+            return sorted(chain[chain.index(cur):])
+        chain.append(cur)
+        parent = snap.get(cur, {}).get("parent")
+        if parent is not None and parent not in snap:
+            return None  # dangling — a different discrepancy, not a cycle
+        cur = parent
+    return None
 
 def cmd_spawn(args):
     cfg = load_config()
@@ -1423,6 +1515,102 @@ def cmd_audit(args):
                      f"{[ln for ln, _ in malformed_lines]}")
 
     add("runs_jsonl_consistency", not j_bad, "; ".join(j_bad) if j_bad else "none")
+
+    # (k) parent-tree budget/topology consistency (spec §11) — under the project lock,
+    # locate this task's root and traverse all descendants (a single scan of every
+    # .eaos/T-*/state.json parent field). Flags a dangling parent reference (points at a
+    # task id that doesn't exist), a cycle (a task reachable from itself via parent
+    # pointers), and a persisted tree-wide spawns.count total over the configured cap.
+    with project_lock():
+        snap = audit_task_snapshot()
+        root = audit_locate_root(args.id, snap) if args.id in snap else args.id
+        tree = audit_tree_members(root, snap)
+
+        dangling = []
+        for tid in tree:
+            parent = snap.get(tid, {}).get("parent")
+            if parent is not None and parent not in snap:
+                dangling.append(tid)
+        dangling.sort()
+        cycle_members = set()
+        for tid in tree:
+            cyc = audit_find_cycle(tid, snap)
+            if cyc:
+                cycle_members.update(cyc)
+
+        cap = cfg["max_agent_spawns_per_task"]
+        total = sum(snap[tid]["spawns"] for tid in tree if tid in snap)
+
+    k_bad = []
+    if dangling:
+        k_bad.append(f"dangling parent ref(s): {dangling}")
+    if cycle_members:
+        k_bad.append(f"cycle detected among: {sorted(cycle_members)}")
+    if total > cap:
+        k_bad.append(f"tree spawn total {total} exceeds cap {cap} (root={root}, "
+                     f"members={sorted(tree)})")
+    k_detail = (f"root={root} total={total}/{cap} members={sorted(tree)}"
+                if not k_bad else "; ".join(k_bad))
+    add("parent_tree_budget_consistency", not k_bad, k_detail)
+
+    # (l) revision journal monotonicity (spec §11) — cross-check .eaos/<id>/
+    # revisions.jsonl (appended by save_state on every successful mutation, per fix L)
+    # against the live state.json. Flags: state.revision regressed below the journal's
+    # max recorded revision; the journal not strictly increasing by exactly 1 (gaps or
+    # duplicates); the latest journal state_sha256 not matching sha256 of the current
+    # state.json bytes (tamper/corruption/out-of-band edit — intended to fire on a
+    # manual state.json edit); and malformed journal lines. A task with no journal yet
+    # (it predates this feature and hasn't been mutated since) is ok, not a discrepancy.
+    journal_path = revisions_path(args.id)
+    l_bad = []
+    l_note = None
+    if not os.path.isfile(journal_path):
+        l_note = "no journal yet (pre-journal task)"
+    else:
+        entries = []
+        malformed_journal = []
+        with open(journal_path, encoding="utf-8") as f:
+            for lineno, raw in enumerate(f, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                    rev = obj["revision"]
+                    sha = obj["state_sha256"]
+                    if not isinstance(rev, int) or not isinstance(sha, str):
+                        raise ValueError("bad journal entry types")
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    malformed_journal.append(lineno)
+                    continue
+                entries.append({"revision": rev, "state_sha256": sha})
+
+        if malformed_journal:
+            l_bad.append(f"malformed journal line(s): {malformed_journal}")
+
+        if entries:
+            revs = [e["revision"] for e in entries]
+            if any(revs[i + 1] != revs[i] + 1 for i in range(len(revs) - 1)):
+                l_bad.append(f"journal revisions not strictly increasing by 1: {revs}")
+
+            journal_max = max(revs)
+            state_rev = state.get("revision")
+            if isinstance(state_rev, int) and state_rev < journal_max:
+                l_bad.append(f"state.revision {state_rev} < journal max {journal_max} "
+                             f"(regression)")
+
+            with open(state_path(args.id), "rb") as f:
+                current_bytes = f.read()
+            current_sha = hashlib.sha256(current_bytes).hexdigest()
+            if entries[-1]["state_sha256"] != current_sha:
+                l_bad.append("latest journal state_sha256 does not match current "
+                             "state.json (tamper/corruption/out-of-band edit)")
+
+            if revs[0] != 1:
+                l_note = f"journal started at revision {revs[0]}"
+
+    l_detail = "; ".join(l_bad) if l_bad else (l_note or "clean")
+    add("revision_monotonicity", not l_bad, l_detail)
 
     discrepancies = [c for c in checks if not c["ok"]]
 

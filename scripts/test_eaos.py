@@ -1211,5 +1211,225 @@ class TestTaskNewIdempotency(EaosTestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.cwd, ".eaos", "idempotency.json")))
 
 
+class TestParentTreeBudgetConsistency(EaosTestCase):
+    """audit check (k): dangling parents, cycles, and a tree-wide spawn total over the
+    configured cap — all detected from a single scan of every task's parent field."""
+
+    def audit_check(self, tid):
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        report = json.loads(out)
+        by_name = {c["name"]: c for c in report["checks"]}
+        return rc, by_name["parent_tree_budget_consistency"]
+
+    def test_tree_cap_lowered_flags_discrepancy_from_either_task(self):
+        # Reviewer's exact repro: parent+child, 2 total spawns, cap dropped to 1 after
+        # the fact — auditing EITHER task must catch it.
+        self.init(max_spawns=10)
+        rc, out, err = run(self.cwd, "task", "new", "root task")
+        self.assertEqual(rc, 0, err)
+        parent = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "child task", "--parent", parent)
+        self.assertEqual(rc, 0, err)
+        child = out.strip()
+        run(self.cwd, "spawn", parent, "--agent", "a1")
+        run(self.cwd, "spawn", child, "--agent", "a2")
+
+        cfg_path = os.path.join(self.cwd, ".eaos", "config.json")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        cfg["max_agent_spawns_per_task"] = 1
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f)
+
+        for tid in (parent, child):
+            rc, check = self.audit_check(tid)
+            self.assertEqual(rc, 1)
+            self.assertFalse(check["ok"])
+            self.assertIn("tree spawn total 2 exceeds cap 1", check["detail"])
+            self.assertIn(parent, check["detail"])
+            self.assertIn(child, check["detail"])
+
+    def test_clean_tree_is_ok_with_root_total_cap(self):
+        self.init(max_spawns=10)
+        rc, out, err = run(self.cwd, "task", "new", "root task")
+        self.assertEqual(rc, 0, err)
+        parent = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "child task", "--parent", parent)
+        self.assertEqual(rc, 0, err)
+        child = out.strip()
+        run(self.cwd, "spawn", parent, "--agent", "a1")
+        run(self.cwd, "spawn", child, "--agent", "a2")
+
+        # Overall audit rc is unrelated here (spawning without a phase change trips the
+        # unrelated phase_intake_consistency check) — only this specific check matters.
+        _, check = self.audit_check(parent)
+        self.assertTrue(check["ok"])
+        self.assertIn(f"root={parent}", check["detail"])
+        self.assertIn("total=2/10", check["detail"])
+        self.assertIn(child, check["detail"])
+
+    def test_dangling_parent_flagged(self):
+        self.init()
+        tid = self.new_task("orphan-to-be")
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        state["parent"] = "T-999"
+        with open(state_path, "w") as f:
+            json.dump(state, f)
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertFalse(check["ok"])
+        self.assertIn("dangling", check["detail"])
+        self.assertIn(tid, check["detail"])
+
+    def test_cycle_flagged(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "task A")
+        self.assertEqual(rc, 0, err)
+        a = out.strip()
+        rc, out, err = run(self.cwd, "task", "new", "task B")
+        self.assertEqual(rc, 0, err)
+        b = out.strip()
+
+        a_path = os.path.join(self.cwd, ".eaos", a, "state.json")
+        b_path = os.path.join(self.cwd, ".eaos", b, "state.json")
+        with open(a_path) as f:
+            a_state = json.load(f)
+        with open(b_path) as f:
+            b_state = json.load(f)
+        a_state["parent"] = b
+        b_state["parent"] = a
+        with open(a_path, "w") as f:
+            json.dump(a_state, f)
+        with open(b_path, "w") as f:
+            json.dump(b_state, f)
+
+        for tid in (a, b):
+            rc, check = self.audit_check(tid)
+            self.assertEqual(rc, 1)
+            self.assertFalse(check["ok"])
+            self.assertIn("cycle", check["detail"])
+            self.assertIn(a, check["detail"])
+            self.assertIn(b, check["detail"])
+
+
+class TestRevisionMonotonicity(EaosTestCase):
+    """audit check (l): .eaos/<id>/revisions.jsonl, appended by save_state under the
+    caller's already-held task lock, cross-checked against the live state.json."""
+
+    def audit_check(self, tid):
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        report = json.loads(out)
+        by_name = {c["name"]: c for c in report["checks"]}
+        return rc, by_name["revision_monotonicity"]
+
+    def journal_lines(self, tid):
+        path = os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl")
+        with open(path) as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def test_normal_mutation_sequence_is_clean(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+
+        lines = self.journal_lines(tid)
+        self.assertEqual([e["revision"] for e in lines], [1, 2, 3, 4])
+        for e in lines:
+            self.assertIn("at", e)
+            self.assertIn("state_sha256", e)
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 0)
+        self.assertTrue(check["ok"])
+        self.assertEqual(check["detail"], "clean")
+
+    def test_rollback_flagged_as_regression(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        self.assertEqual(state["revision"], 3)
+        state["revision"] = 1  # reviewer's exact repro: revision 3 rolled back to 1
+        with open(state_path, "w") as f:
+            json.dump(state, f, indent=2)
+            f.write("\n")
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertFalse(check["ok"])
+        self.assertIn("regression", check["detail"])
+
+    def test_out_of_band_edit_without_revision_change_flagged_as_hash_mismatch(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+
+        state_path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(state_path) as f:
+            state = json.load(f)
+        state["title"] = "tampered title"  # revision left untouched
+        with open(state_path, "w") as f:
+            json.dump(state, f, indent=2)
+            f.write("\n")
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertFalse(check["ok"])
+        self.assertIn("does not match current state.json", check["detail"])
+        self.assertNotIn("regression", check["detail"])
+
+    def test_pre_journal_task_seeds_journal_on_next_mutation(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")  # revision 2; journal has [1, 2]
+
+        journal_path = os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl")
+        os.remove(journal_path)
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 0)
+        self.assertTrue(check["ok"])
+        self.assertIn("no journal yet (pre-journal task)", check["detail"])
+
+        # The next mutation reseeds the journal at whatever revision it lands on (3),
+        # not 1 — this is not a discrepancy.
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+        self.assertEqual([e["revision"] for e in self.journal_lines(tid)], [3])
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 0)
+        self.assertTrue(check["ok"])
+        self.assertIn("journal started at revision 3", check["detail"])
+
+    def test_journal_gap_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+
+        journal_path = os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl")
+        with open(journal_path) as f:
+            raw_lines = [l for l in f if l.strip()]
+        self.assertEqual(len(raw_lines), 4)
+        kept = [l for l in raw_lines if json.loads(l)["revision"] != 2]
+        with open(journal_path, "w") as f:
+            f.writelines(kept)
+
+        rc, check = self.audit_check(tid)
+        self.assertEqual(rc, 1)
+        self.assertFalse(check["ok"])
+        self.assertIn("not strictly increasing", check["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
