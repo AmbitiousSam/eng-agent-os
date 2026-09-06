@@ -317,6 +317,33 @@ run_hook posttool "$(printf '{"tool_name":"Bash","session_id":"sm","cwd":"%s","t
 assert_eq "(l) non-task-new Bash exit 0" "0" "$HOOK_RC"
 if [ -e "$PROJ/.eaos/sessions/sm" ]; then bad "(l) unrelated Bash call created a mapping"; \
 else ok "(l) unrelated Bash call binds nothing"; fi
+# round 5 item 2: misleading command text + a real task id in stdout must NOT bind
+fake_json="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "session_id": "sx", "cwd": sys.argv[1], "tool_use_id": "tu-l3",
+  "tool_input": {"command": "echo \"eaos task new\"; echo " + sys.argv[2]},
+  "tool_response": {"stdout": "eaos task new\n" + sys.argv[2] + "\n", "exit_code": 0}}))
+' "$PROJ" "$TL")"
+run_hook posttool "$fake_json"
+if [ -e "$PROJ/.eaos/sessions/sx" ]; then bad "(l) echo'd 'eaos task new' bound a session"; \
+else ok "(l) 'eaos task new' inside an echo string binds nothing"; fi
+comment_json="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "session_id": "sy", "cwd": sys.argv[1], "tool_use_id": "tu-l4",
+  "tool_input": {"command": "# eaos task new was run earlier\ncat notes.txt"},
+  "tool_response": {"stdout": sys.argv[2] + "\n", "exit_code": 0}}))
+' "$PROJ" "$TL")"
+run_hook posttool "$comment_json"
+if [ -e "$PROJ/.eaos/sessions/sy" ]; then bad "(l) commented 'eaos task new' bound a session"; \
+else ok "(l) 'eaos task new' in a comment binds nothing"; fi
+# a genuine task-new command shape, but the task is already claimed by 'sl' -> refused
+run_hook posttool "$(printf '{"tool_name":"Bash","session_id":"sz","cwd":"%s","tool_use_id":"tu-l5","tool_input":{"command":"cd /x && python3 ~/.claude/eaos/bin/eaos task new \"y\""},"tool_response":{"stdout":"%s\\n","exit_code":0}}' "$PROJ" "$TL")"
+if [ -e "$PROJ/.eaos/sessions/sz" ]; then bad "(l) second session hijacked a claimed task"; \
+else ok "(l) claimed task cannot be re-bound by another session (--fresh)"; fi
+# and the unmapped session sz, with T exactly one active task, still records nothing
+run_hook pretool "$(printf '{"tool_name":"Task","tool_input":{"subagent_type":"dev"},"cwd":"%s","tool_use_id":"tu-l6","session_id":"sz"}' "$PROJ")"
+assert_eq "(l) unmapped session exit 0" "0" "$HOOK_RC"
+assert_eq "(l) unmapped session never adopts the sole active task (round 5 item 1)" "0" "$(spawns_of "$PROJ" "$TL")"
 rm -rf "$PROJ"
 
 echo "=== (m) installer: preserves 0600, refuses malformed hooks, quotes paths with spaces ==="

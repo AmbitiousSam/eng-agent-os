@@ -1401,9 +1401,11 @@ class TestRevisionMonotonicity(EaosTestCase):
         with open(state_path) as f:
             state = json.load(f)
         del state["journal_enabled"]
+        del state["journal_start_revision"]
         with open(state_path, "w") as f:
             json.dump(state, f, indent=2)
             f.write("\n")
+        open(os.path.join(self.cwd, ".eaos", "heads.jsonl"), "w").close()  # no anchor either
 
         rc, check = self.audit_check(tid)
         self.assertEqual(rc, 0)
@@ -1555,16 +1557,27 @@ class TestSessionScopedCurrent(EaosTestCase):
         run(self.cwd, "task", "new", "two", "--session", "s2")
         rc, out, err = self.resolve("s3")
         self.assertEqual(rc, 1)
-        self.assertIn("ambiguous", err)
+        self.assertIn("no mapping", err)
         self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "s3")))
 
-    def test_unmapped_session_binds_when_single_active_task(self):
+    def test_unmapped_session_never_adopts_the_sole_active_task(self):
+        """Round 5 item 1: the only active task may belong to a session with no binder;
+        adopting it misattributes spawns and blocks THIS session on THAT budget."""
         self.init()
         tid = self.new_task()
         rc, out, err = self.resolve("s9")
-        self.assertEqual((rc, out), (0, tid))
-        with open(os.path.join(self.cwd, ".eaos", "sessions", "s9")) as f:
-            self.assertEqual(f.read().strip(), tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("never adopts", err)
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "s9")))
+
+    def test_no_session_id_fails_open_once_any_session_is_tracked(self):
+        self.init()
+        tid = self.new_task()
+        self.assertEqual(self.resolve()[1], tid)              # true no-session host
+        run(self.cwd, "session", "bind", tid, "--session", "s1")
+        rc, out, err = self.resolve()
+        self.assertEqual(rc, 1)
+        self.assertIn("sessions are tracked", err)
 
     def test_no_session_id_uses_current_only_when_unambiguous(self):
         self.init()
@@ -1608,6 +1621,159 @@ class TestSessionScopedCurrent(EaosTestCase):
         self.assertEqual(rc, 2)
         rc, out, err = run(self.cwd, "session", "bind", tid, "--session", ".hidden")
         self.assertEqual(rc, 2)
+
+
+class TestFreshBind(EaosTestCase):
+    """Round 5 item 2: the PostToolUse binder's `session bind --fresh` accepts only a
+    recently created task that no other session claims — untrusted command text/stdout
+    cannot hijack an established task."""
+
+    def set_created(self, tid, iso):
+        path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(path) as f:
+            st = json.load(f)
+        st["created"] = iso
+        with open(path, "w") as f:
+            json.dump(st, f)
+
+    def test_fresh_bind_accepts_just_created_unclaimed_task(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "s1", "--fresh")
+        self.assertEqual(rc, 0, err)
+
+    def test_fresh_bind_refuses_old_task(self):
+        self.init()
+        tid = self.new_task()
+        self.set_created(tid, "2026-01-01T00:00:00")
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "s1", "--fresh")
+        self.assertEqual(rc, 1)
+        self.assertIn("created", err)
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "s1")))
+
+    def test_fresh_bind_refuses_task_claimed_by_another_session(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "session", "bind", tid, "--session", "owner")
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "intruder", "--fresh")
+        self.assertEqual(rc, 1)
+        self.assertIn("already bound", err)
+        # the same session re-binding its own task is fine (hook retry)
+        rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "owner", "--fresh")
+        self.assertEqual(rc, 0, err)
+
+
+class TestTaskNewIdempotencySession(EaosTestCase):
+    """Round 5 item 4: the session is part of the task-new request."""
+
+    def test_same_key_from_other_session_conflicts(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "x", "--session", "sa",
+                           "--idempotency-key", "k1")
+        self.assertEqual(rc, 0)
+        rc, out, err = run(self.cwd, "task", "new", "x", "--session", "sb",
+                           "--idempotency-key", "k1")
+        self.assertEqual(rc, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", out)
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, ".eaos", "sessions", "sb")))
+
+    def test_replay_rebinds_session(self):
+        self.init()
+        rc, out, err = run(self.cwd, "task", "new", "x", "--session", "sa",
+                           "--idempotency-key", "k1")
+        tid = out.strip()
+        os.remove(os.path.join(self.cwd, ".eaos", "sessions", "sa"))  # mapping lost
+        rc, out, err = run(self.cwd, "task", "new", "x", "--session", "sa",
+                           "--idempotency-key", "k1")
+        self.assertEqual((rc, out.strip()), (0, tid))
+        with open(os.path.join(self.cwd, ".eaos", "sessions", "sa")) as f:
+            self.assertEqual(f.read().strip(), tid)
+
+
+class TestProjectHeadAnchor(EaosTestCase):
+    """Round 5 item 3: head truncation and coordinated state+journal rollback."""
+
+    def check(self, tid, name):
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        by_name = {c["name"]: c for c in json.loads(out)["checks"]}
+        return rc, by_name[name]
+
+    def test_journal_head_truncation_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        jp = os.path.join(self.cwd, ".eaos", tid, "revisions.jsonl")
+        with open(jp) as f:
+            lines = f.readlines()
+        with open(jp, "w") as f:
+            f.writelines(lines[1:])   # drop the HEAD, keep the tail intact
+        rc, check = self.check(tid, "revision_monotonicity")
+        self.assertEqual(rc, 1)
+        self.assertIn("journal head truncated", check["detail"])
+
+    def test_coordinated_rollback_of_state_and_journal_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        tdir = os.path.join(self.cwd, ".eaos", tid)
+        with open(os.path.join(tdir, "state.json"), "rb") as f:
+            old_state = f.read()
+        with open(os.path.join(tdir, "revisions.jsonl"), "rb") as f:
+            old_journal = f.read()
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        run(self.cwd, "gate", tid, "DESIGN", "--check", "lint", "--pass")
+        # restore BOTH files to the earlier consistent pair — inside the task dir the
+        # journal and state agree perfectly
+        with open(os.path.join(tdir, "state.json"), "wb") as f:
+            f.write(old_state)
+        with open(os.path.join(tdir, "revisions.jsonl"), "wb") as f:
+            f.write(old_journal)
+        rc, l = self.check(tid, "revision_monotonicity")
+        self.assertTrue(l["ok"], l["detail"])           # the in-dir check is fooled...
+        rc, n = self.check(tid, "project_head_anchor")
+        self.assertEqual(rc, 1)
+        self.assertFalse(n["ok"])                        # ...the project anchor is not
+        self.assertIn("rollback", n["detail"])
+
+    def test_clean_history_is_clean(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "spawn", tid, "--agent", "developer")
+        rc, n = self.check(tid, "project_head_anchor")
+        self.assertEqual((rc, n["detail"]), (0, "clean"))
+
+
+class TestLockStealAudit(EaosTestCase):
+    """Round 5 item 6: a stolen stale lock is a discrepancy until acknowledged."""
+
+    def test_steal_recorded_and_flagged_until_acknowledged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        lock = os.path.join(self.cwd, ".eaos", tid, ".lock")
+        with open(lock, "w") as f:
+            f.write("1")
+        old = 1_500_000_000
+        os.utime(lock, (old, old))
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("stealing", err)
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        m = {c["name"]: c for c in json.loads(out)["checks"]}["lock_steals"]
+        self.assertIn("unacknowledged", m["detail"])   # the steal line itself must not ack
+        with open(os.path.join(self.cwd, ".eaos", tid, "warroom.md")) as f:
+            self.assertIn("LOCK STOLEN", f.read())
+        rc, out, err = run(self.cwd, "append", tid, "--from", "human", "--to", "orchestrator",
+                           "--type", "STATUS",
+                           "--body", "lock-steal-ack: re-ran status, spawns/warroom agree")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 0, out)
+        m = {c["name"]: c for c in json.loads(out)["checks"]}["lock_steals"]
+        self.assertIn("acknowledged", m["detail"])
 
 
 if __name__ == "__main__":

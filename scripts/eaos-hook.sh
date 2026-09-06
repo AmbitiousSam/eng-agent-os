@@ -14,9 +14,9 @@
 # attribute each other's spawns/audits. The mapping is created mechanically by the
 # `posttool` mode below the moment `eaos task new` runs (PostToolUse on Bash: the task id
 # is in the tool's stdout), or by `task new --session` / $EAOS_SESSION_ID. Resolution
-# rules live in the CLI (one place, unit-tested); the short version: a mapped active task
-# wins; with no mapping and exactly one active task the session is bound to it; anything
-# ambiguous fails OPEN.
+# rules live in the CLI (one place, unit-tested); the short version: only a mapped active
+# task is acted on — an unmapped session NEVER adopts a task (round 5 item 1), it fails
+# OPEN. Hosts without session ids fall back to CURRENT only while no session is tracked.
 #
 # FAIL OPEN by default: any infrastructure problem (no .eaos dir, no eaos binary,
 # unparseable stdin, no resolvable task, an eaos usage/exit-2 error, and — round 4
@@ -92,16 +92,23 @@ agent_name = tool_input.get("subagent_type") or tool_input.get("description") or
 agent_name = str(agent_name).strip()[:40] or "unnamed"
 
 # posttool: did this Bash call run `eaos task new`, and which id did it print?
+# Command text and stdout are UNTRUSTED (round 5 item 2): `eaos task new` must appear in
+# command position (start / after ; & | ( or newline, optional VAR=x prefixes, optional
+# python3 and a path) — not inside a string, echo argument or comment; the tool must have
+# exited 0; and the id is the LAST non-empty stdout line (task new prints it last). Even
+# then `session bind --fresh` in the CLI only accepts a recent, unclaimed task.
 command = str(tool_input.get("command") or "")
-is_task_new = bool(re.search(r"\beaos\s+task\s+new\b", command))
+cmd_pos = r"(?:^|[;&|(]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:python3?\s+)?(?:\S*/)?eaos\s+task\s+new\b"
+is_task_new = bool(re.search(cmd_pos, command))
 new_task_id = ""
 if is_task_new:
     resp = d.get("tool_response")
+    exit_code = resp.get("exit_code", 0) if isinstance(resp, dict) else 0
     text = resp.get("stdout", "") if isinstance(resp, dict) else resp
     text = text if isinstance(text, str) else json.dumps(resp)
-    ids = re.findall(r"^(T-\d+)\s*$", text, re.M)
-    if len(ids) == 1:          # exactly one id line, else we do not guess
-        new_task_id = ids[0]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if exit_code in (0, "0", None) and lines and re.fullmatch(r"T-\d+", lines[-1]):
+        new_task_id = lines[-1]
 
 # Idempotency key material: the tool_use_id when present (stable across a hook retry
 # for the SAME tool call), else a hash of the raw input (best-effort — still collapses
@@ -150,7 +157,7 @@ posttool)
   [ -n "${NEW_TASK_ID:-}" ] || exit 0
   [ -n "${SESSION_ID:-}" ] || exit 0
   (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" session bind "$NEW_TASK_ID" \
-     --session "$SESSION_ID" >/dev/null 2>&1)
+     --session "$SESSION_ID" --fresh >/dev/null 2>&1)
   exit 0
   ;;
 pretool)

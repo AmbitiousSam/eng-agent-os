@@ -67,6 +67,7 @@ LOOPBACK_CLASSES = ("recoverable", "transient", "hard_blocker")
 
 LOCK_STALE_SECONDS = 60
 EXIT_INFRA = 4   # lock contention/timeout: not a verdict (see module docstring)
+SESSION_BIND_FRESH_SECONDS = 300   # `session bind --fresh`: task must be this recent
 LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_POLL_SECONDS = 0.05
 
@@ -142,6 +143,10 @@ def save_state(task_id, state):
     # then treats a missing/empty revisions.jsonl as deleted history, not as a legacy
     # pre-journal task (review round 4 medium-1).
     state["journal_enabled"] = True
+    # First journaled revision, fixed forever: audit (l) requires the journal's first line
+    # to carry exactly this revision, so deleting the HEAD of revisions.jsonl is detected
+    # (review round 5 item 3) — not just tail truncation.
+    state.setdefault("journal_start_revision", state["revision"])
     p = state_path(task_id)
     tmp = f"{p}.tmp.{os.getpid()}"
     payload = json.dumps(state, indent=2) + "\n"
@@ -169,6 +174,61 @@ def save_state(task_id, state):
         os.write(fd, line)
     finally:
         os.close(fd)
+
+    # Project-level head anchor (round 5 item 3): the same (revision, sha) is appended
+    # OUTSIDE the task directory, so a coordinated rollback of state.json + revisions.jsonl
+    # inside .eaos/<id>/ no longer agrees with anything — audit (n) compares the task's
+    # latest head here against the live state. A rollback that also rewrites this file
+    # is out of scope (that needs an anchor outside the checkout, e.g. git or a remote);
+    # the claim is "out-of-band edits and corruption are detected", not tamper-proofing.
+    head = {"task": task_id, "revision": state["revision"],
+            "state_sha256": entry["state_sha256"], "at": entry["at"]}
+    hline = (json.dumps(head) + "\n").encode("utf-8")
+    fd = os.open(heads_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, hline)
+    finally:
+        os.close(fd)
+
+def heads_path():
+    return os.path.join(eaos_dir(), "heads.jsonl")
+
+def lock_events_path():
+    return os.path.join(eaos_dir(), "lock-events.jsonl")
+
+def read_heads_for_task(task_id):
+    p = heads_path()
+    out = []
+    if not os.path.isfile(p):
+        return out
+    with open(p, encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("task") == task_id:
+                out.append(obj)
+    return out
+
+def read_lock_events():
+    p = lock_events_path()
+    out = []
+    if not os.path.isfile(p):
+        return out
+    with open(p, encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                out.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+    return out
 
 def warroom_log(task_id, line):
     with open(warroom_path(task_id), "a", encoding="utf-8") as f:
@@ -305,12 +365,16 @@ def resolve_hook_task(sid):
     """The ONE rule a host hook uses to find its task. Returns (task_id, reason):
       1. sid given and .eaos/sessions/<sid> names an ACTIVE task -> that task
          (a mapping to a closed/missing task is stale: dropped, then fall through).
-      2. sid given, no mapping, exactly ONE active task in the project -> bind sid to it
-         and return it (unambiguous — there is nothing else it could be).
+      2. sid given, no mapping -> None. NEVER adopt an unclaimed task: "the only active
+         task" may belong to a session that simply has no binder installed, and adopting
+         it would attribute this session's spawns to it — and block this session on the
+         other one's budget (review round 5 item 1). Binding happens only explicitly:
+         `session bind --fresh` from the PostToolUse binder, `task new --session`, or
+         $EAOS_SESSION_ID.
       3. no sid (host without session ids): .eaos/CURRENT, only if it names an active
-         task AND it is the only active task.
-      4. anything else (0 or >=2 active tasks without a mapping) -> None: ambiguity
-         means the hook fails open rather than attribute work to the wrong task."""
+         task, it is the only active task, AND no session has claimed anything (a
+         checkout where sessions are being tracked is not a no-session host).
+      4. anything else -> None: ambiguity means fail open, never a guess."""
     active = active_task_ids()
     if sid:
         mapped = read_session_map(sid)
@@ -318,11 +382,11 @@ def resolve_hook_task(sid):
             if mapped in active:
                 return mapped, "mapped"
             remove_session_map(sid)
-        if len(active) == 1:
-            write_session_map(sid, active[0])
-            return active[0], "bound-single-active"
         return None, ("no active task" if not active else
-                      f"ambiguous: {len(active)} active tasks and no mapping for {sid}")
+                      f"no mapping for session {sid} ({len(active)} active task(s)); bind "
+                      f"explicitly — an unmapped session never adopts a task")
+    if all_session_maps():
+        return None, "no session id, but sessions are tracked in this checkout"
     current = read_current()
     if current and current in active and len(active) == 1:
         return current, "current-single-active"
@@ -368,7 +432,29 @@ def read_episode_lines_for_task(task_id):
 # project lock is always acquired first, so lock order is consistent everywhere and
 # concurrent callers can never deadlock against each other.
 
-def _acquire_lock(path):
+def _record_lock_steal(path, age, task_id):
+    """A stale-lock steal means a previous eaos process died mid-mutation (or a real bug):
+    the state it was writing may be inconsistent. Record it project-wide and in the task's
+    war room so audit (m) can surface it until a human acknowledges it (round 5 item 6)."""
+    ev = {"at": now_iso(), "path": path, "age_seconds": round(age), "by_pid": os.getpid(),
+          "task": task_id}
+    try:
+        os.makedirs(eaos_dir(), exist_ok=True)
+        fd = os.open(lock_events_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, (json.dumps(ev) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        if task_id and os.path.isfile(warroom_path(task_id)):
+            # NB: this line must never contain the ack token itself (audit (m) scans the
+            # war room for it) — a steal record that acknowledged itself would be useless.
+            warroom_log(task_id, f"[{ev['at']}] LOCK STOLEN path={path} age={ev['age_seconds']}s "
+                                 f"— a prior process died mid-mutation; review state, then "
+                                 f"acknowledge with a STATUS message (token: docs/HOOKS.md)")
+    except OSError:
+        pass
+
+def _acquire_lock(path, task_id=None):
     deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
     while True:
         try:
@@ -390,6 +476,7 @@ def _acquire_lock(path):
                 os.remove(path)
             except OSError:
                 pass
+            _record_lock_steal(path, age, task_id)
             continue
         if time.monotonic() >= deadline:
             die(f"lock busy: {path} — another eaos process is mutating this state, "
@@ -405,7 +492,7 @@ def _release_lock(path):
 @contextlib.contextmanager
 def task_lock(task_id):
     p = os.path.join(task_dir(task_id), ".lock")
-    _acquire_lock(p)
+    _acquire_lock(p, task_id)
     try:
         yield
     finally:
@@ -541,7 +628,7 @@ def save_task_idempotency(store):
     os.replace(tmp, p)
 
 def compute_task_new_fingerprint(title, kind, stakes, playbook, parent, paths,
-                                  criteria_ids, outcome):
+                                  criteria_ids, outcome, session=None):
     """Fingerprint for the task-new idempotency key (fix C) — distinct from
     compute_fingerprint (the duplicate-detection fingerprint below): this one folds in
     every field the CLI call actually carries (including stakes/playbook, which don't
@@ -558,6 +645,7 @@ def compute_task_new_fingerprint(title, kind, stakes, playbook, parent, paths,
         "paths": sorted(p.strip() for p in (paths or []) if p.strip()),
         "criteria": sorted(c.strip() for c in (criteria_ids or []) if c.strip()),
         "outcome": (outcome or "").strip(),
+        "session": session or "",   # round 5 item 4: same key from another session = conflict
     }, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -709,7 +797,7 @@ def cmd_task_new(args):
                               outcome)
     key_fp = compute_task_new_fingerprint(args.title, args.kind, args.stakes,
                                            args.playbook, args.parent, paths,
-                                           criteria_ids, outcome)
+                                           criteria_ids, outcome, session)
 
     with project_lock():
         # fix C: task-new idempotency key, checked before anything else — a replay
@@ -724,6 +812,10 @@ def cmd_task_new(args):
                           f"for a different request (task new '{args.title}') — use a "
                           f"new key")
                     sys.exit(1)
+                # Replay (caller lost the first response): re-establish the session
+                # binding too, so the retry is idempotent for the mapping as well.
+                if session and entry["task_id"] in active_task_ids():
+                    write_session_map(session, entry["task_id"])
                 print(entry["task_id"])
                 sys.exit(0)
 
@@ -1563,6 +1655,8 @@ def cmd_audit(args):
                 with open(journal_path, encoding="utf-8") as f:
                     journal_raw = f.read()
             snap = audit_task_snapshot()
+            heads = read_heads_for_task(args.id)
+            lock_events = read_lock_events()
     checks = []
 
     def add(name, ok, detail):
@@ -1630,6 +1724,24 @@ def cmd_audit(args):
             if age > LOCK_STALE_SECONDS:
                 stale.append((lock_path, round(age)))
     add("stale_locks", not stale, f"stale={stale}" if stale else "none")
+
+    # (m) lock steals (round 5 item 6): a stolen stale lock means an eaos process died
+    # mid-mutation — the state it was writing may be inconsistent, so "stealing with a
+    # warning" is not enough; it stays a discrepancy until a human reviews the state and
+    # acknowledges with `eaos append <id> --from human --to orchestrator --type STATUS
+    # --body "lock-steal-ack: <what was checked>"`.
+    # Project-lock steals count against every task that was active at the time.
+    created_at = state.get("created") or ""
+    relevant_steals = [e for e in lock_events
+                       if e.get("task") == args.id
+                       or (e.get("task") is None and str(e.get("at", "")) >= created_at)]
+    acknowledged = "lock-steal-ack" in warroom_text
+    m_ok = not relevant_steals or acknowledged
+    add("lock_steals", m_ok,
+        "none" if not relevant_steals else
+        (f"{len(relevant_steals)} steal(s) acknowledged" if acknowledged else
+         f"{len(relevant_steals)} unacknowledged stale-lock steal(s): "
+         f"{[(e.get('at'), e.get('path')) for e in relevant_steals]}"))
 
     # (g) revision present and monotonic (v2 files) — a single snapshot can only check
     # presence/validity, not history, but a missing/invalid revision is itself the bug.
@@ -1792,11 +1904,48 @@ def cmd_audit(args):
                 l_bad.append("latest journal state_sha256 does not match current "
                              "state.json (tamper/corruption/out-of-band edit)")
 
+            start = state.get("journal_start_revision")
+            if isinstance(start, int):
+                if revs[0] != start:
+                    l_bad.append(f"journal head truncated: first line is revision "
+                                 f"{revs[0]}, journal_start_revision={start}")
             if revs[0] != 1:
                 l_note = f"journal started at revision {revs[0]}"
 
     l_detail = "; ".join(l_bad) if l_bad else (l_note or "clean")
     add("revision_monotonicity", not l_bad, l_detail)
+
+    # (n) project head anchor (round 5 item 3): .eaos/heads.jsonl holds every (revision,
+    # sha) this task ever saved, OUTSIDE the task directory. The latest head must equal
+    # the live state; a coordinated rollback of state.json + revisions.jsonl inside
+    # .eaos/<id>/ therefore still shows as drift. Tasks written before the anchor existed
+    # (no journal_start_revision marker) are noted, not flagged.
+    n_bad = []
+    n_note = None
+    anchored = isinstance(state.get("journal_start_revision"), int)
+    head_revs = [h.get("revision") for h in heads]
+    if any(not isinstance(r, int) for r in head_revs):
+        n_bad.append("malformed head entry (non-integer revision)")
+    elif not heads:
+        if anchored:
+            n_bad.append("no project head recorded for an anchored task (heads.jsonl "
+                         "missing or scrubbed?)")
+        else:
+            n_note = "no project head yet (pre-anchor task)"
+    else:
+        if any(head_revs[i + 1] <= head_revs[i] for i in range(len(head_revs) - 1)):
+            n_bad.append(f"project heads not strictly increasing: {head_revs}")
+        latest = heads[-1]
+        state_rev = state.get("revision")
+        if isinstance(state_rev, int) and state_rev < latest["revision"]:
+            n_bad.append(f"state.revision {state_rev} < project head {latest['revision']} "
+                         f"(rollback — state and journal restored together?)")
+        elif isinstance(state_rev, int) and state_rev > latest["revision"]:
+            n_bad.append(f"state.revision {state_rev} > project head {latest['revision']} "
+                         f"(state advanced without a recorded save)")
+        elif latest.get("state_sha256") != hashlib.sha256(state_bytes).hexdigest():
+            n_bad.append("project head sha256 does not match current state.json")
+    add("project_head_anchor", not n_bad, "; ".join(n_bad) if n_bad else (n_note or "clean"))
 
     discrepancies = [c for c in checks if not c["ok"]]
 
@@ -1821,6 +1970,24 @@ def cmd_session(args):
             state = load_state(args.id)
             if state.get("status") == "closed":
                 die(f"cannot bind session to closed task {args.id}", 1)
+            if args.fresh:
+                # The PostToolUse binder's path (round 5 item 2): command text and stdout
+                # are untrusted, so the CLI only accepts a bind that is consistent with
+                # "this session just created this task": the task is recent and no OTHER
+                # session already claims it. A crafted `echo "eaos task new"; echo T-001`
+                # therefore cannot hijack an established task.
+                try:
+                    created = datetime.datetime.fromisoformat(state.get("created", ""))
+                    age = (datetime.datetime.now() - created).total_seconds()
+                except (TypeError, ValueError):
+                    age = float("inf")
+                if age > SESSION_BIND_FRESH_SECONDS or age < 0:
+                    die(f"refusing --fresh bind: {args.id} was created {age:.0f}s ago "
+                        f"(limit {SESSION_BIND_FRESH_SECONDS}s)", 1)
+                owners = [o for o, t in all_session_maps().items() if t == args.id and o != sid]
+                if owners:
+                    die(f"refusing --fresh bind: {args.id} is already bound to session(s) "
+                        f"{owners}", 1)
             write_session_map(sid, args.id)
         print(f"OK: session {sid} -> {args.id}")
     elif args.session_cmd == "unbind":
@@ -1961,6 +2128,9 @@ def build_parser():
         sp = session_sub.add_parser(name)
         if name == "bind":
             sp.add_argument("id")
+            sp.add_argument("--fresh", action="store_true",
+                            help="only bind a recently created task no other session "
+                                 "claims (the PostToolUse binder's guard)")
         sp.add_argument("--session", default=None,
                         help="host session id; defaults to $EAOS_SESSION_ID")
         sp.set_defaults(func=cmd_session)

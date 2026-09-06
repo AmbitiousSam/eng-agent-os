@@ -24,20 +24,28 @@ rules live in the CLI in one place and are unit-tested:
 
 1. The session's mapping names an **active** task → that task. (A mapping to a closed
    task is stale: dropped, then continue.)
-2. No mapping, and exactly **one** active task in the project → bind the session to it
-   and use it. There is nothing else it could be.
+2. No mapping → **fail open.** An unmapped session never adopts a task — not even "the
+   only active one", which may belong to a session that simply has no binder installed;
+   adopting it would attribute this session's spawns to it and block this session on
+   that task's budget (review round 5, item 1). Binding is always explicit (below).
 3. No `session_id` at all (a host without one) → `.eaos/CURRENT`, only if it names an
-   active task **and** it is the only active task.
-4. Anything else — zero or two-or-more active tasks with no mapping — → **fail open.**
-   Ambiguity never becomes a guess.
+   active task, it is the only active task, **and** no session is tracked in this checkout
+   (once any session has claimed a task, an id-less hook fails open).
+4. Anything else → fail open. Ambiguity never becomes a guess.
 
-How the mapping is created: the `PostToolUse` hook on `Bash` sees `eaos task new` in the
-command and the new id in its stdout, and runs `eaos session bind` (mechanical — no model
-cooperation). `eaos task new --session <id>` and `$EAOS_SESSION_ID` do the same for
-wrappers that know their session. `eaos episode close` re-points every session bound to
-the closing task at its parent if that parent is still active (child work done, parent
-continues), else removes the mapping. `.eaos/CURRENT` remains as the single-session legacy
-pointer (`eaos status` with no id still reads it).
+How the mapping is created: the `PostToolUse` hook on `Bash` sees `eaos task new` in
+**command position** (start of the command or after `;`, `&`, `|`, `(`, or a newline —
+not inside a quoted string, an `echo` argument or a comment), requires the tool's
+`exit_code` to be 0, takes the **last** non-empty stdout line as the id, and then runs
+`eaos session bind --fresh`, which the CLI accepts only for a task created within the last
+5 minutes that no other session already claims (review round 5, item 2 — command text and
+stdout are untrusted, so a crafted `echo "eaos task new"; echo T-001` cannot hijack an
+established task). `eaos task new --session <id>` and `$EAOS_SESSION_ID` bind directly for
+wrappers that know their session; the session is part of `task new`'s idempotency
+fingerprint (same key from another session is a conflict; a replay re-establishes the
+mapping). `eaos episode close` re-points every session bound to the closing task at its
+parent if that parent is still active, else removes the mapping. `.eaos/CURRENT` remains
+the single-session legacy pointer (`eaos status` with no id still reads it).
 
 ## Fail-open vs. the two fail-closed cases
 
@@ -66,6 +74,21 @@ lock — one coherent snapshot — and computes the checks after releasing both.
 concurrent mutation can therefore never land between two reads and masquerade as drift
 (review round 4, HIGH-1: the reviewer measured 3/100 false stop-blocks; this repo's
 harness measured 100/100 before the fix, 0/40 after, `TestAuditCoherentSnapshot`).
+
+**What audit can and cannot see about history.** Every `save_state` appends
+`(revision, sha256)` to the task's `revisions.jsonl` **and** to the project-level
+`.eaos/heads.jsonl`, and fixes `journal_start_revision` in state on the first journaled
+save. Audit therefore flags: a deleted or emptied journal, a journal whose first line is
+not the recorded start (head truncation), a state revision below the journal or the
+project head, and a coordinated rollback of `state.json` + `revisions.jsonl` inside the
+task directory (the project head no longer agrees) — review round 5, item 3. A rollback
+that also rewrites `heads.jsonl` is **not** detected: that needs an anchor outside the
+checkout (git, a remote), and the claim here is "out-of-band edits and corruption are
+detected", not tamper-proofing. A stolen stale lock (a prior eaos process died
+mid-mutation) is recorded in `.eaos/lock-events.jsonl` and the war room, and stays an
+audit discrepancy until a human reviews the state and acknowledges it with
+`eaos append <id> --from human --to orchestrator --type STATUS --body "lock-steal-ack: <what you checked>"`
+(round 5, item 6).
 
 ## Adapter tests
 
