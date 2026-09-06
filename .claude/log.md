@@ -55,3 +55,16 @@
 - Tests: 77->89 CLI, 35->67 hook assertions (injection, lock, two-session, posttool, perms).
 - Run 3 pre-registration superseded (rev 2): prompt made honestly non-deploy-bound so
   stakes=toy is the correct classification M-010 measures.
+
+## 2026-09-05 (later still) — Review round 5: session adoption, binder trust, history anchors
+- Reviewer's 6 open items all reproduced: unmapped session adopted the sole active task and got
+  blocked on its budget; `echo "eaos task new"; echo T-001` bound a session; journal head
+  removal read "started at revision 2" = clean; coordinated state+journal rollback clean; same
+  task-new key from another session replayed silently; stale-lock steal warned, audit clean.
+- Fixes: resolve never binds implicitly (no-sid CURRENT fallback only while zero sessions
+  tracked); posttool: command-position regex + exit_code 0 + last stdout line + `session bind
+  --fresh` (<=300s old, unclaimed); journal_start_revision + .eaos/heads.jsonl project anchor
+  + audit (n) project_head_anchor; session in task-new fingerprint, replay re-binds;
+  .eaos/lock-events.jsonl + warroom LOCK STOLEN line + audit (m) lock_steals until ack.
+- Run 3 pre-registration rev 3: bar is the protocol's < 2x, not "~3x"; outcomes enumerated.
+- Honest scope line: a rollback that also rewrites heads.jsonl is not detectable in-checkout.

@@ -1,12 +1,16 @@
 # Now (as of 2026-09-05)
 
-**State:** main clean, all pushed. Runtime §11 literal after 4 external review rounds
-(89 CLI tests + 67 hook assertions). Hooks (M-007) shipped, opt-in via
-scripts/install-eaos-hooks.sh — round 4 made them session-scoped (.eaos/sessions/<id>,
-PostToolUse binder), gave the CLI exit 4 for lock contention (hooks fail open on it), made
-audit a coherent locked snapshot, and hardened the installer (0600 preserved, exclusive
-backups, schema refusal, quoted paths). v3 spec FROZEN
+**State:** main clean, all pushed. Runtime §11 literal after 5 external review rounds
+(99 CLI tests + 72 hook assertions). Hooks (M-007) opt-in via scripts/install-eaos-hooks.sh.
+Round 4: session-scoped hooks, exit 4 for lock contention, coherent audit snapshot,
+installer hardening. Round 5: unmapped sessions never adopt a task; PostToolUse binder only
+via `session bind --fresh` (command-position regex, exit_code 0, last stdout line, recent +
+unclaimed task); journal_start_revision + project-level heads.jsonl anchor (head truncation
+and coordinated in-dir rollback detected; heads.jsonl rewrite out of scope, documented);
+session in task-new idempotency; lock steals audited until `lock-steal-ack`. v3 spec FROZEN
 (docs/specs/2026-09-01-eaos-v3-architecture.md).
+
+**Position:** Round 5 fixes landed -> awaiting round 6 reproduction/review -> then Run 3.
 
 **Other machine / after pull:** `./setup.sh && ./scripts/install-eaos-hooks.sh` (re-run the
 installer: it adds the PostToolUse entry idempotently).
@@ -18,10 +22,10 @@ installer: it adds the PostToolUse entry idempotently).
 - T-029 (real, synergina): 56 mechanized mutations, 2 review-caught bugs, audit caught drift.
 
 ## Next (binding order, spec §14)
-1. **Run 3** — pre-registered rev 2 (evals/results/2026-09-05-run3-hidden-checks.md;
-   rev 1 superseded: "put it live today" contradicted stakes=toy under routing.yaml's own
-   definition). USER runs both arms (install hooks first). Measures M-010: target checks
-   held, cost <= ~3x. MUST happen before shape work (attribution).
+1. **Run 3** — pre-registered rev 3 (evals/results/2026-09-05-run3-hidden-checks.md;
+   rev 1 superseded: "put it live today" contradicted stakes=toy; rev 2 superseded: "~3x"
+   was softer than the protocol's fixed < 2x bar). USER runs both arms after round-6 review
+   (install hooks first). Measures M-010 against < 2x. MUST happen before shape work.
 2. §14 step 2 SHAPE — packs + compiled prompts + generated config + parity tests.
 3. Cognitive runtime (§5–7), memory lifecycle (§10), each behind verbs (budget ≤6 new).
 

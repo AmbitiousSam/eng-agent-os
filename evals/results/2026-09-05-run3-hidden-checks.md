@@ -1,14 +1,21 @@
 # Run 3 (build-class, "snip" URL shortener) — pre-registered hidden checks
 # Committed BEFORE either arm runs. Neither arm sees these.
 # PURPOSE: first measurement of M-010 (stakes-proportional lifecycle) + hooks (M-007).
-# Run 2 baseline: EAOS 7/7 checks at 14.4x input tokens. Target: checks held, cost <= ~3x.
+# Run 2 baseline: EAOS 7/7 checks at 14.4x input tokens.
 #
-# SUPERSEDES rev 1 (commit 0e6c358) — neither arm had run. Rev 1's prompt said "i want to
-# put it live today", which under routing.yaml's own frozen definition ("production =
-# ... anything deploy-bound") is production stakes, while the M-010 measurement below
-# required stakes = toy. Contradictory pre-registration (review round 4). Resolution:
-# keep the toy classification (that is what M-010 measures) and make the prompt honestly
-# non-deploy-bound. Both arms get the identical corrected prompt, so the pairing is intact.
+# SUCCESS BAR (rev 3): the system bar in docs/EVAL-PROTOCOL.md — quality held AND total
+# tokens < 2x baseline. That bar was fixed before run 1 and is not adjusted per run. Rev 2
+# of this file wrote "cost <= ~3x" as the target; that was an interim expectation, not
+# the bar, and pre-registering a softer number than the protocol's is exactly the kind of
+# post-hoc drift the protocol exists to prevent (review round 5 item 5). Outcomes:
+#   < 2x with checks held  -> M-010 validated (mechanisms.yaml status -> validated)
+#   2x..3x with checks held -> improvement recorded, bar NOT met, M-010 stays instrumented;
+#                              next cut is chosen from the per-phase token breakdown
+#   >= 3x, or checks lost    -> M-010 removal condition evaluated
+#
+# SUPERSEDES rev 2 (39c3708) for the bar wording only; rev 2 superseded rev 1 (0e6c358),
+# whose prompt "put it live today" contradicted stakes=toy under routing.yaml's own
+# definition ("production = ... anything deploy-bound"). Neither arm has run.
 
 Prompt (identical for both arms; append the directory):
   build me a tiny url shortener called snip, just for me to run locally. paste a long
@@ -38,6 +45,7 @@ Hidden checks (a toy still has to WORK; these are correctness, not launch ceremo
 M-010 measurement (EAOS arm only): stakes recorded in state.json = toy (the prompt is
 explicitly non-deploy-bound, so `production` would be a misclassification and is itself a
 finding); launch-review, devops/platform/sre, tech-writer NOT spawned (spawn log);
-security-reviewer + verifier present. Cost ratio vs baseline reported per EVAL-PROTOCOL;
-hooks' audit clean at close; `.eaos/sessions/<id>` bound to the task (M-007 round-4 fix
-observed in a real run).
+security-reviewer + verifier present. Cost ratio vs baseline reported per EVAL-PROTOCOL
+against the < 2x bar above; hooks' audit clean at close (all 14 checks incl.
+project_head_anchor and lock_steals); `.eaos/sessions/<id>` bound to the task by the
+PostToolUse binder (M-007 round-4/5 fixes observed in a real run).
