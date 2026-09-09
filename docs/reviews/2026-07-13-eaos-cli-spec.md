@@ -22,7 +22,9 @@ Rules become computational: a ceiling is an exit code, not a sentence the model 
 Create `.eaos/memory/{decisions,patterns,lessons,codebase}/`. Seed `.eaos/memory/index.md`
 from `~/.claude/eaos/memory-seed/index.md` if present and index absent. Write
 `.eaos/config.json` if absent with defaults:
-`{"max_same_issue_loops": 3, "max_total_loopbacks": 8, "max_agent_spawns_per_task": 12}`
+`{"max_same_issue_loops": 3, "max_total_loopbacks": 8, "max_agent_spawns_per_task": 12,
+"reserved_verifier_spawns": 1}` (the reserve: top slot(s) only a verifier may take — added
+after the 2026-09-09 real run showed the orchestrator re-grading its own fix at 12/12)
 (these mirror routing.yaml > loop_guard/budget; the CLI reads ONLY config.json — the
 orchestrator may override values at init via flags: `--max-spawns N` etc.). Idempotent.
 

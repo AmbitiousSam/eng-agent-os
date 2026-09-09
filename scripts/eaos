@@ -37,7 +37,13 @@ DEFAULT_CONFIG = {
     "max_same_issue_loops": 3,
     "max_total_loopbacks": 8,
     "max_agent_spawns_per_task": 12,
+    # Slots at the top of the cap only a verifier may take. Evidence (real run 2026-09-09,
+    # T-001 msg-039): at 12/12 the orchestrator applied the verifier's fix itself AND
+    # re-graded it itself — maker/checker isolation lost exactly when it mattered. With
+    # a reserve, the last slot always buys an independent re-grade.
+    "reserved_verifier_spawns": 1,
 }
+VERIFIER_AGENT_RE = re.compile(r"verifier", re.I)
 
 STATE_SCHEMA_VERSION = 2
 IDEMPOTENCY_KEEP = 200
@@ -679,6 +685,8 @@ def cmd_init(args):
                 cfg["max_same_issue_loops"] = args.max_same_issue
             if args.max_total_loopbacks is not None:
                 cfg["max_total_loopbacks"] = args.max_total_loopbacks
+            if args.reserve_verifier is not None:
+                cfg["reserved_verifier_spawns"] = args.reserve_verifier
             with open(config_path(), "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
                 f.write("\n")
@@ -1097,6 +1105,16 @@ def cmd_spawn(args):
                 print(f"BUDGET EXCEEDED: tree total would be {total + 1}/{cap} spawns "
                       f"(root {root}) — downgrade or drop an agent, or raise the cap "
                       f"consciously at init")
+                sys.exit(1)
+            reserve = int(cfg.get("reserved_verifier_spawns", 0) or 0)
+            if reserve and total + 1 > cap - reserve and not VERIFIER_AGENT_RE.search(args.agent):
+                warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
+                                      f"tree_total={total}/{cap} root={root} "
+                                      f"(last {reserve} slot(s) reserved for a verifier)")
+                print(f"BUDGET EXCEEDED: the last {reserve} of {cap} spawns are RESERVED for "
+                      f"a verifier re-grade (tree total {total}/{cap}, root {root}) — a "
+                      f"fresh checker must grade the fix; the orchestrator never grades "
+                      f"its own work")
                 sys.exit(1)
 
             state["spawns"]["count"] += 1
@@ -1697,6 +1715,16 @@ def cmd_audit(args):
     add("episode_vs_status", d_ok,
         f"episode_closed={episode_closed} state_status={state.get('status')}")
 
+    # (o) DONE without an episode: the run record (M-008) is what every later
+    # evaluation reads; a task at phase DONE with no `eaos episode close` has finished its
+    # work and skipped its evidence. Real run 2026-09-09: 3 of 3 tasks. Surfaced here so
+    # the Stop hook makes the close mechanical instead of optional.
+    o_bad = (state.get("phase") == "DONE" and not episode_closed
+             and state.get("status") != "closed")
+    add("done_without_episode_close", not o_bad,
+        f"phase=DONE but no episode line — run `eaos episode close {args.id}`" if o_bad
+        else "none")
+
     # (e) unresolved same-issue loop counters at/over ceiling without a BLOCKED/deadlock
     # note (a hard_blocker ledger entry, or a DEADLOCK/BLOCKED mention, for that issue)
     max_same = cfg["max_same_issue_loops"]
@@ -2015,6 +2043,9 @@ def build_parser():
     p_init.add_argument("--max-spawns", type=int, default=None)
     p_init.add_argument("--max-same-issue", type=int, default=None)
     p_init.add_argument("--max-total-loopbacks", type=int, default=None)
+    p_init.add_argument("--reserve-verifier", type=int, default=None, dest="reserve_verifier",
+                        help="spawn slots at the top of the cap only a verifier may use "
+                             "(default 1)")
     p_init.set_defaults(func=cmd_init)
 
     p_task = sub.add_parser("task")

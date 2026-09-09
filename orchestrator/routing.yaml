@@ -185,6 +185,10 @@ budget:
   # Use a countable proxy instead: cap on agent spawns. Enforced by the eaos CLI when present
   # (config.json mirrors these values at `eaos init`); prompt-enforced otherwise.
   max_agent_spawns_per_task: 12
+  # The top slot(s) may only be taken by a verifier. Evidence (real run 2026-09-09, T-001):
+  # at 12/12 the orchestrator applied the verifier's fix AND re-graded it itself. A reserve
+  # means the budget can run out of makers, never out of an independent checker.
+  reserved_verifier_spawns: 1
   on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value]
 parallelism:
   within_phase: true        # independent agents in a phase MAY run concurrently

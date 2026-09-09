@@ -41,7 +41,8 @@ new_project() {
   CLAUDE_HOME="$PROJ/fake-claude-home"
   export CLAUDE_HOME
   mkdir -p "$CLAUDE_HOME"
-  ( cd "$PROJ" && python3 "$EAOS" init --max-spawns "${1:-2}" >/dev/null )
+  # reserve 0: these scenarios exercise the hard cap; the verifier reserve has its own CLI tests
+  ( cd "$PROJ" && python3 "$EAOS" init --max-spawns "${1:-2}" --reserve-verifier 0 >/dev/null )
 }
 
 new_task() {  # new_task <project-dir> [title]
@@ -312,6 +313,19 @@ print(json.dumps({"tool_name": "Bash", "session_id": "sl", "cwd": sys.argv[1],
 run_hook posttool "$post_json"
 assert_eq "(l) posttool exit 0" "0" "$HOOK_RC"
 assert_eq "(l) session mapped to the new task" "$TL" "$(cat "$PROJ/.eaos/sessions/sl" 2>/dev/null)"
+# the shape the orchestrator ACTUALLY writes (real run 2026-09-09): a shell variable
+real_json="$(python3 -c '
+import json, sys
+cmd = "cd " + sys.argv[1] + " && E=~/.claude/eaos/bin/eaos\n$E init 2>&1 | tail -5\n$E task new \"Recreate lost deployment\" --kind feature --stakes production 2>&1 | tail -5"
+print(json.dumps({"tool_name": "Bash", "session_id": "sv", "cwd": sys.argv[1], "tool_use_id": "tu-l0",
+  "tool_input": {"command": cmd},
+  "tool_response": {"stdout": "OK: eaos initialized\n" + sys.argv[2] + "\n", "stderr": "", "exit_code": 0}}))
+' "$PROJ" "$TL")"
+rm -f "$PROJ/.eaos/sessions/sl"   # free the task so a fresh bind is legal
+run_hook posttool "$real_json"
+assert_eq "(l) \$E task new (variable in command position) binds" "$TL" "$(cat "$PROJ/.eaos/sessions/sv" 2>/dev/null)"
+rm -f "$PROJ/.eaos/sessions/sv"
+run_hook posttool "$post_json"   # restore 'sl' ownership for the hijack checks below
 # an unrelated Bash call binds nothing
 run_hook posttool "$(printf '{"tool_name":"Bash","session_id":"sm","cwd":"%s","tool_use_id":"tu-l2","tool_input":{"command":"ls"},"tool_response":{"stdout":"T-999\\n"}}' "$PROJ")"
 assert_eq "(l) non-task-new Bash exit 0" "0" "$HOOK_RC"

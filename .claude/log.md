@@ -68,3 +68,15 @@
   .eaos/lock-events.jsonl + warroom LOCK STOLEN line + audit (m) lock_steals until ack.
 - Run 3 pre-registration rev 3: bar is the protocol's < 2x, not "~3x"; outcomes enumerated.
 - Honest scope line: a rollback that also rewrites heads.jsonl is not detectable in-checkout.
+
+## 2026-09-09 — First real run on the round-5 runtime (glideparcs-pdc, private)
+- 3 tasks (recover lost CDK deploy branch, CI/CD pipeline, local rehearsal); 19+35 ACs verified
+  by independent verifier; 2 real loop-backs (env-pinning defect, IAM escalation); T-003 ran at
+  internal stakes with ONE agent — proportional ceremony worked unprompted.
+- App export failed (session 1 process died mid-T-002 at 15:55Z; session 2 is a resume that
+  replays history). Rendered exports from disk: <project>/.eaos/exports/ (gitignored).
+- EAOS findings -> fixes: binder regex blind to `$E task new` (every hook fire failed open;
+  spawns were recorded cooperatively, 25/25 matched the transcript's Agent launches);
+  episode close skipped 3/3 (audit (o)); orchestrator self-fix + self-regrade at 12/12
+  (reserved verifier slot). Tests 99->103 CLI, 72->73 hook.
+- Cost profile: main 227k out / 50.5M cache-read; subagents 35k out / 48.9M cache-read.

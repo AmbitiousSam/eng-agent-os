@@ -35,7 +35,11 @@ rules live in the CLI in one place and are unit-tested:
 
 How the mapping is created: the `PostToolUse` hook on `Bash` sees `eaos task new` in
 **command position** (start of the command or after `;`, `&`, `|`, `(`, or a newline —
-not inside a quoted string, an `echo` argument or a comment), requires the tool's
+not inside a quoted string, an `echo` argument or a comment; the `eaos` word may be a
+literal with an optional path/`python3` prefix **or a shell variable holding it**, since
+`E=~/.claude/eaos/bin/eaos; $E task new` is what the orchestrator actually writes — the
+2026-09-09 real run had every hook fire fail open because the binder demanded a literal),
+requires the tool's
 `exit_code` to be 0, takes the **last** non-empty stdout line as the id, and then runs
 `eaos session bind --fresh`, which the CLI accepts only for a task created within the last
 5 minutes that no other session already claims (review round 5, item 2 — command text and

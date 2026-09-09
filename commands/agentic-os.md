@@ -175,6 +175,9 @@ Apply `routing.yaml`:
   theater scales with stakes, not enthusiasm) — but a conditional SIGNAL (auth/payments/pii)
   always overrides a stakes-skip for security-reviewer: the defect-catchers are never
   stakes-skipped. Note applied skips in the war room.
+- Never grade your own fix. If the budget is exhausted and a loop-back needs a re-grade, the
+  last `reserved_verifier_spawns` slot(s) exist for exactly that — spawn a fresh verifier; if
+  even that is gone, the task is BLOCKED on a human, not "re-confirmed by orchestrator".
 - Respect the spawn budget (`routing.yaml > budget.max_agent_spawns_per_task`): tally every
   subagent spawn in the war room as you go; when a spawn would exceed the cap, downgrade
   conditional agents one model tier, then drop the lowest-value one — and note the omission

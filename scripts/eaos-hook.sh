@@ -95,10 +95,18 @@ agent_name = str(agent_name).strip()[:40] or "unnamed"
 # Command text and stdout are UNTRUSTED (round 5 item 2): `eaos task new` must appear in
 # command position (start / after ; & | ( or newline, optional VAR=x prefixes, optional
 # python3 and a path) — not inside a string, echo argument or comment; the tool must have
-# exited 0; and the id is the LAST non-empty stdout line (task new prints it last). Even
-# then `session bind --fresh` in the CLI only accepts a recent, unclaimed task.
+# exited 0; and stdout must contain exactly ONE distinct bare task-id line (`task new`
+# prints the id on its own line; `status`/`report` output never does — the real 09-09 run
+# chained `$E status` after `task new`, so "last line" was wrong). Even then
+# `session bind --fresh` in the CLI only accepts a recent, unclaimed task.
 command = str(tool_input.get("command") or "")
-cmd_pos = r"(?:^|[;&|(]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:python3?\s+)?(?:\S*/)?eaos\s+task\s+new\b"
+# The eaos word may be a literal (with or without a path/python3 prefix) OR a shell variable
+# holding it — `E=~/.claude/eaos/bin/eaos; $E task new` is the shape the orchestrator
+# actually writes (real run 2026-09-09 — every hook fire failed open because this regex
+# demanded a literal `eaos`). The --fresh guard in the CLI is the real hijack protection; the
+# regex only has to reject string/echo/comment positions.
+eaos_word = r"(?:(?:python3?\s+)?(?:\S*/)?eaos|\"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\"?)"
+cmd_pos = r"(?:^|[;&|(]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*" + eaos_word + r"\s+task\s+new\b"
 is_task_new = bool(re.search(cmd_pos, command))
 new_task_id = ""
 if is_task_new:
@@ -106,9 +114,9 @@ if is_task_new:
     exit_code = resp.get("exit_code", 0) if isinstance(resp, dict) else 0
     text = resp.get("stdout", "") if isinstance(resp, dict) else resp
     text = text if isinstance(text, str) else json.dumps(resp)
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if exit_code in (0, "0", None) and lines and re.fullmatch(r"T-\d+", lines[-1]):
-        new_task_id = lines[-1]
+    ids = {ln.strip() for ln in text.splitlines() if re.fullmatch(r"T-\d+", ln.strip())}
+    if exit_code in (0, "0", None) and len(ids) == 1:
+        new_task_id = ids.pop()
 
 # Idempotency key material: the tool_use_id when present (stable across a hook retry
 # for the SAME tool call), else a hash of the raw input (best-effort — still collapses

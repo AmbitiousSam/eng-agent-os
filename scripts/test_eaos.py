@@ -150,7 +150,7 @@ class TestAppend(EaosTestCase):
 
 class TestSpawn(EaosTestCase):
     def test_spawn_cap_exit_code(self):
-        self.init(max_spawns=3)
+        self.init(max_spawns=3, reserve_verifier=0)  # hard cap only; reserve tested separately
         tid = self.new_task()
         for i in range(3):
             rc, out, err = run(self.cwd, "spawn", tid, "--agent", f"agent{i}")
@@ -571,7 +571,7 @@ class TestEpisodeCloseIdempotency(EaosTestCase):
 
 class TestParentChildBudget(EaosTestCase):
     def test_tree_budget_exceeded_across_parent_and_child(self):
-        self.init(max_spawns=2)
+        self.init(max_spawns=2, reserve_verifier=0)
         rc, out, err = run(self.cwd, "task", "new", "root task")
         self.assertEqual(rc, 0, err)
         parent = out.strip()
@@ -1774,6 +1774,60 @@ class TestLockStealAudit(EaosTestCase):
         self.assertEqual(rc, 0, out)
         m = {c["name"]: c for c in json.loads(out)["checks"]}["lock_steals"]
         self.assertIn("acknowledged", m["detail"])
+
+
+class TestReservedVerifierSpawn(EaosTestCase):
+    """Real run 2026-09-09 (T-001 msg-039): at 12/12 the orchestrator applied the fix and
+    re-graded it itself. The top slot(s) of the cap are reserved for a verifier."""
+
+    def test_last_slot_refuses_non_verifier_and_accepts_verifier(self):
+        self.init(max_spawns=3)  # default reserve 1 -> 2 general slots + 1 verifier slot
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "qa-engineer")[0], 0)
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "developer")
+        self.assertEqual(rc, 1)
+        self.assertIn("RESERVED for a verifier", out)
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "verifier")
+        self.assertEqual(rc, 0, out)
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "verifier")
+        self.assertEqual(rc, 1)  # hard cap still binds the verifier too
+        self.assertIn("BUDGET EXCEEDED", out)
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertIn("Spawns: 3/3", out)
+
+    def test_reserve_configurable_to_zero(self):
+        self.init(max_spawns=1, reserve_verifier=0)
+        tid = self.new_task()
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
+
+
+class TestDoneWithoutEpisodeClose(EaosTestCase):
+    """Real run 2026-09-09: 3 of 3 tasks reached DONE and never ran episode close."""
+
+    def check(self, tid):
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        return rc, {c["name"]: c for c in json.loads(out)["checks"]}["done_without_episode_close"]
+
+    def test_done_without_close_is_a_discrepancy_until_closed(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DONE")
+        rc, c = self.check(tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("episode close", c["detail"])
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+        rc, c = self.check(tid)
+        self.assertTrue(c["ok"])
+
+    def test_active_task_not_yet_done_is_fine(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        rc, c = self.check(tid)
+        self.assertTrue(c["ok"])
 
 
 if __name__ == "__main__":

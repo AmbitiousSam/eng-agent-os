@@ -12,6 +12,14 @@ session in task-new idempotency; lock steals audited until `lock-steal-ack`. v3 
 
 **Position:** Round 5 fixes landed -> awaiting round 6 reproduction/review -> then Run 3.
 
+**Real run 2026-09-09 (private repo, 3 tasks, production stakes, ~5h, ~262k output tokens):**
+hooks fired but every fire failed open — the binder demanded a literal `eaos` and the
+orchestrator writes `$E task new` (fixed: variable in command position now binds; --fresh
+guard is the real protection). 3/3 tasks reached DONE without `episode close` (new audit check
+done_without_episode_close). At 12/12 the orchestrator applied AND re-graded its own fix
+(new `reserved_verifier_spawns: 1`). Model-switch observed: 68/165 main turns on opus-5 under
+`inherit` — cause unknown (fast mode? /model?), ask user.
+
 **Other machine / after pull:** `./setup.sh && ./scripts/install-eaos-hooks.sh` (re-run the
 installer: it adds the PostToolUse entry idempotently).
 
