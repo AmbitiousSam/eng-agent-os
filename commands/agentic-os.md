@@ -161,6 +161,14 @@ now (routes to incident-response).
 
 Append its returned messages to the war room.
 
+**Two things the analyst may not assume, ever** (`routing.yaml > autonomy.clarification.
+always_ask_about`): a deliverable-class word in the ask (*workflow, pipeline, CI/CD, deploy,
+release, migration, rollout*) is a blocking question unless the codebase or a sibling repo
+demonstrates the house pattern (then cite it); and an identity/attribution constraint
+(author, e-mail form, "only my name in the commits") becomes an acceptance criterion checked
+at commit time. Never add `Co-Authored-By` or "Generated with" trailers to a human's commits
+unless they asked for them.
+
 **Trivial fast-path:** if complexity is `trivial`, do a quick `grep`/read to confirm the one
 spot, spawn `developer` to make the change + self-review, then go to Step 8.
 
@@ -175,9 +183,16 @@ Apply `routing.yaml`:
   theater scales with stakes, not enthusiasm) — but a conditional SIGNAL (auth/payments/pii)
   always overrides a stakes-skip for security-reviewer: the defect-catchers are never
   stakes-skipped. Note applied skips in the war room.
-- Never grade your own fix. If the budget is exhausted and a loop-back needs a re-grade, the
-  last `reserved_verifier_spawns` slot(s) exist for exactly that — spawn a fresh verifier; if
-  even that is gone, the task is BLOCKED on a human, not "re-confirmed by orchestrator".
+- **Plan the roster within the planning cap** = `max_agent_spawns_per_task` −
+  `reserved_loopback_spawns` − `reserved_verifier_spawns` (15 − 2 − 1 = 12 by default).
+  `eaos spawn` refuses to plan into the reserves; they open only after `eaos loopback` has
+  recorded a real loop-back (or to a verifier, always). A roster that needs more than the
+  planning cap is trimmed by stakes rules or raised consciously at init — never squeezed by
+  "folding" work into yourself.
+- **Never fold a checker into yourself.** Security re-review, code re-review, QA re-run,
+  verifier re-grade: if no slot remains for the checker, the task is BLOCKED on the human
+  (`eaos loopback --class hard_blocker`), not "performed mechanically by orchestrator".
+  `eaos audit` flags any war-room line that folds a checker role. Never grade your own fix.
 - Respect the spawn budget (`routing.yaml > budget.max_agent_spawns_per_task`): tally every
   subagent spawn in the war room as you go; when a spawn would exceed the cap, downgrade
   conditional agents one model tier, then drop the lowest-value one — and note the omission
@@ -354,6 +369,17 @@ Makefile / pyproject / cargo / go). Run all that exist (a missing one is skipped
 - **All green → proceed** to propose the push.
 This is separate from EAOS's own structural validator — it's the actual code passing.
 
+**Executed rehearsal — required for deploy-shaped work, BEFORE the launch review.** If the
+signals include infra, ci-cd, deploy or data-migration, the deliverable must have RUN
+against real state and the result must be an artifact (`rehearsal-report.md`): dry-run plus
+local builds, every transform exercised on real `describe-*` output, and — where a scoped
+or scratch target exists (a role stack, a dev stack, a single ECS service) — a real deploy
+of the smallest unit with the human's confirmation. A pipeline that has never dispatched, a
+stack that has never synthesized against IAM's validators, a script whose `jq` never saw
+real JSON: none of these can reach GO. Real run 2026-09-09: the rehearsal the human had to
+suggest found a crash-loop in 8 minutes, and the first real deploy of the role stack was
+still rejected by CloudFormation for a character the static checks cannot see.
+
 **Launch review (governance gate).** If `routing.yaml > autonomy.launch_review` marks it
 required (complexity ≥ standard and kind is feature/product): run `templates/launch-review.md`
 with security-reviewer + sre-observability owning their sections, and record the verdict in
@@ -392,7 +418,12 @@ artifacts. CLI: `eaos gate <id> DOCUMENT --check <name> --pass|--fail`, advance 
   (Trivial/small tasks: a brief self-score against criteria suffices.) CLI: record each
   criterion via `eaos verify <id> --criterion "AC-1" --verdict pass|fail --evidence "..."`;
   the final package requires `eaos verify <id> --require` to pass, then `eaos report <id>` —
-  a refusal from either means the task is NOT done.
+  a refusal from either means the task is NOT done. **Verdict words are binding:** a criterion
+  that did not execute is `manual_confirmation_required` or `blocked`, never `verified` with
+  "pending"/"human-run"/"superseded" in the evidence (the CLI refuses it); a superseded
+  criterion is dropped and graded under its successor. **Every high RISK in the war room
+  carries a verdict** (`--criterion R-<msg-id>`) before `--require` will pass — tested, or
+  honestly deferred; "follow-up" is not a verdict.
 - Assemble the final package: list every artifact in `.eaos/<id>/artifacts/` (code, spec,
   design, ADRs, review, tests, deploy guide, docs).
 - Write a short retrospective to `.eaos/memory/lessons/<id>.md`; promote any reusable solution

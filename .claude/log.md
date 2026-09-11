@@ -80,3 +80,19 @@
   episode close skipped 3/3 (audit (o)); orchestrator self-fix + self-regrade at 12/12
   (reserved verifier slot). Tests 99->103 CLI, 72->73 hook.
 - Cost profile: main 227k out / 50.5M cache-read; subagents 35k out / 48.9M cache-read.
+
+## 2026-09-11 — Seven fixes from the 09-09 run review ("the blunders")
+- Headline: first real deploy of the reviewed role stack failed (em-dash in IAM description) after
+  35 ACs, review, security, verifier APPROVE, launch GO, rehearsal — static checks never saw it.
+- Blunders: deliverable word "workflows" assumed away (12 agents on wrong scope); five never-run
+  criteria stored `verified` ("HUMAN-RUN pending", "SUPERSEDED") so --require exited 0; high RISK
+  filed as follow-up until the human asked for a rehearsal; checker roles folded into the
+  orchestrator to stay at 12/12; GROUND grepped for an expected role name instead of listing;
+  Co-Authored-By added against instruction -> filter-branch + force push; `inherit` a lie
+  (persona model: frontmatter overrode the session model).
+- Fixes: DEFERRAL_EVIDENCE_RE in verify; open_risks -> R-<msg> verdicts; cap 15 with two
+  reserves; audit (p) checker_role_folded; setup.sh strips model: under inherit + doctor;
+  intake/verifier/playbook/command/routing/loop text for rehearsal, always-ask words,
+  attribution ACs, no-fold; protocol body cap 400. Tests 103->111 CLI, 73 hook.
+- Token observation (09-09 run, deduped): main 227k out / 50.5M cache-read; 25 subagents 35k
+  out / 48.9M cache-read. Orchestrator prose = 87% of output.

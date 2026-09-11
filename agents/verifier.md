@@ -37,6 +37,19 @@ plus an overall verdict: **APPROVE** | **REJECT** (listing the specific failing 
   or a green test naming it is *unverified*, not passed.
 - If a criterion cannot be verified from the spec + diff + checks, say so explicitly and mark
   it — that's a spec bug (untestable criterion), and it blocks APPROVE.
+- **Static is not verified.** `synth`, `diff`, `lint`, `grep` and a green type-check prove
+  shape, not behaviour. For anything deploy-shaped (infra, pipeline, migration, role, stack)
+  a criterion is `verified` only by execution: the rehearsal record, a real dispatch, a real
+  deploy of the smallest unit into a scoped target. Real run 2026-09-09: an IAM role stack
+  passed 35 criteria, review, security and a launch review, and CloudFormation rejected it
+  in the first 30 seconds of the first real deploy (an em-dash in a description string).
+- **Never write `verified` for something that did not run.** HUMAN-RUN, "pending", "would
+  pass", "skipped": the verdict is `manual_confirmation_required` (or `blocked`); the CLI
+  refuses `verified` with that evidence. A superseded criterion is graded under its
+  successor and dropped — it is not a pass.
+- **Every high RISK in the war room needs a verdict** (`R-<msg-id>`): tested to
+  verified/failed, or honestly `blocked` / `manual_confirmation_required`. "Follow-up" is not
+  a verdict and `verify --require` will not accept it.
 
 **May send:** `VERDICT` (APPROVE/REJECT), `RISK`.
 

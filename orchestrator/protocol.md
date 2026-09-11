@@ -81,6 +81,13 @@ war room + artifacts lets the orchestrator continue from the last completed phas
     One or two tight sentences: the issue + what you need to proceed.
 ```
 
+**Body budget: 400 characters.** Detail lives in the `ref` artifact, never in the body. The
+orchestrator's own DECISION/STATUS messages obey the same cap. Measured on the 2026-09-09
+real run: the orchestrator wrote 227k output tokens against 35k for all 25 subagents
+combined — 87% of the run's output was war-room prose, in bodies of 500–1500 characters that
+restated artifacts already on disk. A body over the cap is a sign the content belongs in a
+file with a `ref`.
+
 ## Convergence rule (resolving disagreement)
 
 1. A CHALLENGE must carry evidence or a concrete alternative, else the orchestrator drops it.

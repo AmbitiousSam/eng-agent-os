@@ -20,6 +20,15 @@ playbook** and runs that playbook's phases under kernel rules. The playbooks liv
 - **Pre-push gate** — self-review (maker≠checker) then project code checks, before any push
   (`routing.yaml > autonomy.pre_push`).
 - **Memory** — read at PLAN, written at STABILIZE (`.eaos/memory/`).
+- **Static is not verified** — synth/diff/lint/grep prove shape. Deploy-shaped deliverables
+  must EXECUTE (rehearsal, scoped real deploy) before DONE; `eaos verify` refuses `verified`
+  on deferral-shaped evidence.
+- **Risk-to-test** — a high-priority RISK opens `R-<msg-id>`; `verify --require`/`report`
+  refuse until it carries a verdict. A risk is tested or honestly deferred, never "filed".
+- **Independence beats budget** — the roster is planned within cap minus the loop-back and
+  verifier reserves (`eaos spawn` refuses to plan into them). Folding a checker role
+  (security, review, verifier, QA) into the orchestrator is prohibited: if no checker slot
+  remains, the task is BLOCKED on the human. `eaos audit` flags folds.
 - **Gate enforcement** — a phase does not advance until its exit gate is met; unmet gates
   (missing info, hard disagreement, loop > `loop_guard.max_same_issue_loops`) escalate to the
   human with a one-paragraph blocker summary.

@@ -54,7 +54,9 @@ class TestInit(EaosTestCase):
             self.assertTrue(os.path.isdir(os.path.join(self.cwd, ".eaos/memory", sub)))
         with open(os.path.join(self.cwd, ".eaos/config.json")) as f:
             cfg = json.load(f)
-        self.assertEqual(cfg["max_agent_spawns_per_task"], 12)
+        self.assertEqual(cfg["max_agent_spawns_per_task"], 15)
+        self.assertEqual(cfg["reserved_verifier_spawns"], 1)
+        self.assertEqual(cfg["reserved_loopback_spawns"], 2)
         self.assertEqual(cfg["max_same_issue_loops"], 3)
         self.assertEqual(cfg["max_total_loopbacks"], 8)
 
@@ -150,7 +152,7 @@ class TestAppend(EaosTestCase):
 
 class TestSpawn(EaosTestCase):
     def test_spawn_cap_exit_code(self):
-        self.init(max_spawns=3, reserve_verifier=0)  # hard cap only; reserve tested separately
+        self.init(max_spawns=3, reserve_verifier=0, reserve_loopbacks=0)  # hard cap only
         tid = self.new_task()
         for i in range(3):
             rc, out, err = run(self.cwd, "spawn", tid, "--agent", f"agent{i}")
@@ -571,7 +573,7 @@ class TestEpisodeCloseIdempotency(EaosTestCase):
 
 class TestParentChildBudget(EaosTestCase):
     def test_tree_budget_exceeded_across_parent_and_child(self):
-        self.init(max_spawns=2, reserve_verifier=0)
+        self.init(max_spawns=2, reserve_verifier=0, reserve_loopbacks=0)
         rc, out, err = run(self.cwd, "task", "new", "root task")
         self.assertEqual(rc, 0, err)
         parent = out.strip()
@@ -1781,7 +1783,7 @@ class TestReservedVerifierSpawn(EaosTestCase):
     re-graded it itself. The top slot(s) of the cap are reserved for a verifier."""
 
     def test_last_slot_refuses_non_verifier_and_accepts_verifier(self):
-        self.init(max_spawns=3)  # default reserve 1 -> 2 general slots + 1 verifier slot
+        self.init(max_spawns=3, reserve_loopbacks=0)  # verifier reserve 1 -> 2 general + 1 verifier
         tid = self.new_task()
         run(self.cwd, "phase", tid, "DESIGN")
         self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
@@ -1798,7 +1800,7 @@ class TestReservedVerifierSpawn(EaosTestCase):
         self.assertIn("Spawns: 3/3", out)
 
     def test_reserve_configurable_to_zero(self):
-        self.init(max_spawns=1, reserve_verifier=0)
+        self.init(max_spawns=1, reserve_verifier=0, reserve_loopbacks=0)
         tid = self.new_task()
         self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
 
@@ -1827,6 +1829,130 @@ class TestDoneWithoutEpisodeClose(EaosTestCase):
         tid = self.new_task()
         run(self.cwd, "phase", tid, "DESIGN")
         rc, c = self.check(tid)
+        self.assertTrue(c["ok"])
+
+
+class TestVerifyDeferralLint(EaosTestCase):
+    """Real run 2026-09-09 T-002: 'verified' with evidence 'HUMAN-RUN ... pending' and
+    'SUPERSEDED ... satisfied-by-supersession' let --require exit 0."""
+
+    def test_verified_with_deferral_evidence_is_refused(self):
+        self.init()
+        tid = self.new_task()
+        for ev in ("HUMAN-RUN by spec design; recorded as manual-confirmation pending",
+                   "SUPERSEDED by AC-32; graded as satisfied-by-supersession",
+                   "not yet run — needs the role to exist"):
+            rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-27",
+                               "--verdict", "verified", "--evidence", ev)
+            self.assertEqual(rc, 2, ev)
+            self.assertIn("reads like a deferral", err)
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)  # nothing was recorded
+
+    def test_honest_verdicts_with_same_evidence_are_accepted(self):
+        self.init()
+        tid = self.new_task()
+        rc, out, err = run(self.cwd, "verify", tid, "--criterion", "AC-27",
+                           "--verdict", "manual_confirmation_required",
+                           "--evidence", "HUMAN-RUN: real dispatch pending role creation")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 3)
+
+    def test_bulk_path_lints_too(self):
+        self.init()
+        tid = self.new_task()
+        r = subprocess.run([sys.executable, EAOS, "verify", tid, "--bulk"], cwd=self.cwd,
+                           input="AC-1 | verified | test_x green\nAC-2 | verified | skipped, human-run\n",
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertNotIn("AC-1", out)  # batch is all-or-nothing
+
+
+class TestOpenRisks(EaosTestCase):
+    """Risk-to-test law: a high RISK must get a verdict before --require/report pass."""
+
+    def test_high_risk_blocks_require_until_graded(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        rc, out, err = run(self.cwd, "append", tid, "--from", "sre-observability", "--to",
+                           "orchestrator", "--type", "RISK", "--priority", "high",
+                           "--body", "compliance crash-loops on next rebuild")
+        self.assertEqual(rc, 0, err)
+        msg = out.split()[1]
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("high RISK(s) without a verdict", out)
+        self.assertIn(msg, out)
+        rc, out, err = run(self.cwd, "report", tid)
+        self.assertEqual(rc, 1)
+        run(self.cwd, "verify", tid, "--criterion", f"R-{msg}", "--verdict", "failed",
+            "--evidence", "rehearsal: image exits 1 'no ingress credentials'")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)  # failed is honest and still not done
+        run(self.cwd, "verify", tid, "--criterion", f"R-{msg}", "--verdict", "blocked",
+            "--evidence", "product decision needed: API keys vs auth-disabled")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 3)  # CONDITIONAL, not complete
+
+    def test_low_priority_risk_does_not_open_a_slot(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        run(self.cwd, "append", tid, "--from", "dev", "--to", "orchestrator", "--type", "RISK",
+            "--priority", "low", "--body", "nit")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 0)
+
+
+class TestLoopbackReserve(EaosTestCase):
+    """Zero-slack rosters were the 2026-09-09 blunder: cap 5 = 2 planning + 2 loop-back + 1
+    verifier. Planning into the reserve is refused; a recorded loop-back opens it."""
+
+    def test_planning_cap_then_loopback_opens_reserve(self):
+        self.init(max_spawns=5)
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "code-reviewer")[0], 0)
+        rc, out, err = run(self.cwd, "spawn", tid, "--agent", "tech-writer")
+        self.assertEqual(rc, 1)
+        self.assertIn("planning cap is 2 of 5", out)
+        # a verifier is never held back by the loop-back reserve
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "verifier")[0], 0)
+        rc, out, err = run(self.cwd, "loopback", tid, "--edge", "REVIEW->IMPLEMENT",
+                           "--issue", "sec-10", "--attempt", "remove bootstrap assume")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(run(self.cwd, "spawn", tid, "--agent", "developer")[0], 0)
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertIn("Spawns: 4/5", out)
+
+
+class TestCheckerFoldAudit(EaosTestCase):
+    def test_folded_checker_is_a_discrepancy(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "append", tid, "--from", "orchestrator", "--to", "all", "--type",
+            "DECISION", "--body", "Security RE-REVIEW folded: orchestrator performs the "
+            "mechanical diff check security described as '5-minute'")
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        self.assertEqual(rc, 1)
+        c = {x["name"]: x for x in json.loads(out)["checks"]}["checker_role_folded"]
+        self.assertIn("maker=checker", c["detail"])
+
+    def test_folding_a_non_checker_is_not_flagged(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "append", tid, "--from", "orchestrator", "--to", "all", "--type",
+            "DECISION", "--body", "tech-writer FOLDED into orchestrator (budget)")
+        rc, out, err = run(self.cwd, "audit", tid, "--json")
+        c = {x["name"]: x for x in json.loads(out)["checks"]}["checker_role_folded"]
         self.assertTrue(c["ok"])
 
 

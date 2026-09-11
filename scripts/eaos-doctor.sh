@@ -82,6 +82,17 @@ else
   note "ponytail not detected (optional) — the ladder is baked into the developer persona anyway. /plugin install ponytail@ponytail"
 fi
 
+# models.mode=inherit means installed personas must not carry model: (setup.sh strips it)
+mm="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/orchestrator/routing.yaml" 2>/dev/null)"
+if [ "${mm:-inherit}" = "inherit" ] && [ -n "$need_agents" ]; then
+  stale_model=""
+  for a in $need_agents; do
+    grep -q "^model:" "$CLAUDE_DIR/agents/$a.md" 2>/dev/null && stale_model="$stale_model $a"
+  done
+  if [ -z "$stale_model" ]; then pass "models.mode=inherit: no persona overrides the session model"; else
+    bad "models.mode=inherit but installed personas still pin a model:$stale_model — re-run ./setup.sh"; fi
+fi
+
 echo "Hook accelerators (M-007, optional):"
 if [ -e "$CLAUDE_DIR/eaos/bin/eaos-hook.sh" ]; then
   pass "eaos-hook.sh installed (~/.claude/eaos/bin/eaos-hook.sh)"

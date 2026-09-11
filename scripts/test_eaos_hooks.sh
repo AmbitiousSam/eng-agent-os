@@ -42,7 +42,7 @@ new_project() {
   export CLAUDE_HOME
   mkdir -p "$CLAUDE_HOME"
   # reserve 0: these scenarios exercise the hard cap; the verifier reserve has its own CLI tests
-  ( cd "$PROJ" && python3 "$EAOS" init --max-spawns "${1:-2}" --reserve-verifier 0 >/dev/null )
+  ( cd "$PROJ" && python3 "$EAOS" init --max-spawns "${1:-2}" --reserve-verifier 0 --reserve-loopbacks 0 >/dev/null )
 }
 
 new_task() {  # new_task <project-dir> [title]

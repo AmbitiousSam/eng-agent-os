@@ -61,13 +61,30 @@ if [ -d "$VENDOR_DIR" ]; then
 fi
 
 # 3) Install EAOS engineering personas (the collaborating team).
-say "Installing EAOS engineering agents -> $AGENTS_DIR"
+# models.mode in routing.yaml decides whether the personas' `model:` frontmatter is
+# installed. Under `inherit` (the default) it is STRIPPED: Claude Code honors a persona's
+# `model:` over the parent session's model, so leaving it in made "inherit" a lie — the
+# 2026-09-09 real run was launched on Fable and its subagents ran sonnet/opus/haiku from
+# these very lines. Under `tiered` the lines stay (that is what tiered means).
+MODELS_MODE="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/orchestrator/routing.yaml")"
+MODELS_MODE="${MODELS_MODE:-inherit}"
+say "Installing EAOS engineering agents -> $AGENTS_DIR (models.mode=$MODELS_MODE)"
+STRIP_TMP="$(mktemp -d)"
 for f in "$EAOS_DIR"/agents/*.md; do
   [ -e "$f" ] || continue
   base="$(basename "$f")"
   [ "$base" = "README.md" ] && continue   # don't install the folder readme as an agent
-  install_file "$f" "$AGENTS_DIR/$base"
+  if [ "$MODELS_MODE" = "inherit" ]; then
+    # drop `model:` only inside the first YAML frontmatter block
+    awk 'NR==1 && /^---/ {fm=1; print; next} fm && /^---/ {fm=0} fm && /^model:/ {next} {print}' \
+      "$f" > "$STRIP_TMP/$base"
+    install_file "$STRIP_TMP/$base" "$AGENTS_DIR/$base"
+  else
+    install_file "$f" "$AGENTS_DIR/$base"
+  fi
 done
+rm -rf "$STRIP_TMP"
+[ "$MODELS_MODE" = "inherit" ] && say "  (persona model: lines stripped — spawns inherit the session model)"
 
 # 4) Install THE slash command. One front door: /agentic-os fast-triages every shape of task
 #    (feature, bug, incident, question, product, venture, release, triage) to its playbook.

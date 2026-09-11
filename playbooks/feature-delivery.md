@@ -26,7 +26,7 @@ pre-push gate).
 | **IMPLEMENT** | design approved | developer (qa writes tests in parallel) | code compiles; self-tests pass |
 | **REVIEW** | implementation ready | code-reviewer (+security if signaled) | review `approve`; no blocking findings |
 | **TEST** | review approved | qa-engineer | acceptance criteria pass; existing suite green |
-| **DEPLOY** | tests pass | devops + platform + sre (as signaled) | deploy guide + rollback; **pre-push gate: self-review then code checks green** |
+| **DEPLOY** | tests pass | devops + platform + sre (as signaled) | deploy guide + rollback; **for deploy-shaped work (infra / ci-cd / deploy / migration signals): an EXECUTED rehearsal against real state — dry-run, local builds, the transform run on real describe output, and a real deploy of the smallest unit into a scoped target where one exists — recorded as an artifact before any launch review; a deliverable that never ran cannot reach GO**; **pre-push gate: self-review then code checks green** |
 | **DOCUMENT** | feature complete | tech-writer | docs trace to artifacts |
 | **STABILIZE** | all above done | orchestrator | package + retro + patterns → memory |
 

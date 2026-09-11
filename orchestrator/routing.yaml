@@ -184,12 +184,14 @@ budget:
   # Token-level budgeting is unenforceable here — the model cannot measure its own token usage.
   # Use a countable proxy instead: cap on agent spawns. Enforced by the eaos CLI when present
   # (config.json mirrors these values at `eaos init`); prompt-enforced otherwise.
-  max_agent_spawns_per_task: 12
-  # The top slot(s) may only be taken by a verifier. Evidence (real run 2026-09-09, T-001):
-  # at 12/12 the orchestrator applied the verifier's fix AND re-graded it itself. A reserve
-  # means the budget can run out of makers, never out of an independent checker.
-  reserved_verifier_spawns: 1
-  on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value]
+  # 15 = 12 planning slots + 2 loop-back slots + 1 verifier slot. Real run 2026-09-09 planned
+  # rosters to exactly 12 with zero slack, so every loop-back ate an independent role. The
+  # budget can run out of makers, never out of an independent checker.
+  max_agent_spawns_per_task: 15
+  reserved_verifier_spawns: 1     # top slot(s): verifier only (T-001 msg-039)
+  reserved_loopback_spawns: 2     # open only once `eaos loopback` recorded one; planning into them is refused
+  on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value, then_BLOCK_on_human]
+  never: fold_a_checker_role_into_the_orchestrator   # audit check (p) flags it
 parallelism:
   within_phase: true        # independent agents in a phase MAY run concurrently
   fan_out_test: "only split work you could hand to separate engineers w/ no further talk"
@@ -253,6 +255,8 @@ autonomy:
         - every prior REVIEW finding and QA bug is actually resolved
         - no leftovers: debug logs, TODOs, commented-out code, dead code
         - no secrets/keys/tokens or .env committed
+        - commit author/e-mail/trailers match the human's attribution instruction exactly
+          (no Co-Authored-By / Generated-with unless the human asked for it)
         # Acceptance-criteria grading is owned by `verifier` at independent_verify below —
         # EXCEPT on trivial/small tasks, where the verifier is skipped, so this checklist is
         # the only criteria gate they get:
@@ -292,6 +296,9 @@ autonomy:
       - changes_approach            # the answer materially changes design/scope (not cosmetic)
       - not_inferable               # can't be inferred from codebase, conventions, task text, or a sane default
       - expensive_to_reverse        # guessing wrong means real rework, not a quick edit
+    always_ask_about:               # the one exception to assume-and-proceed (real run 2026-09-09)
+      - deliverable-class words in the ask: workflow, pipeline, ci/cd, deploy, release, migration, rollout
+      - identity/attribution constraints (author, e-mail form, "only my name") -> become ACs
     never_ask_about:                # decide these yourself and note the choice
       - naming, wording, copy
       - reversible/low-cost choices (a library you can swap, a default value)

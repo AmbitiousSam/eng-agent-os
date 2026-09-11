@@ -36,14 +36,40 @@ MSG_TYPES = ["PROPOSE", "QUESTION", "CHALLENGE", "REVIEW", "RISK", "DECISION", "
 DEFAULT_CONFIG = {
     "max_same_issue_loops": 3,
     "max_total_loopbacks": 8,
-    "max_agent_spawns_per_task": 12,
-    # Slots at the top of the cap only a verifier may take. Evidence (real run 2026-09-09,
-    # T-001 msg-039): at 12/12 the orchestrator applied the verifier's fix itself AND
-    # re-graded it itself — maker/checker isolation lost exactly when it mattered. With
-    # a reserve, the last slot always buys an independent re-grade.
+    # 15 = 12 planning slots (unchanged from before) + 2 loop-back slots + 1 verifier slot.
+    # Real run 2026-09-09: rosters were planned to exactly 12 with zero slack, so every
+    # loop-back ate an independent role (security re-review, code re-review, tech-writer,
+    # the verifier's own re-grade) — the budget was treated as the law and maker/checker
+    # isolation as the flex. Reserves invert that: the budget can run out of makers,
+    # never out of an independent checker.
+    "max_agent_spawns_per_task": 15,
+    # Top slot(s): only a verifier may take them (T-001 msg-039 — orchestrator applied the
+    # verifier's fix AND re-graded it itself).
     "reserved_verifier_spawns": 1,
+    # Next slot(s): open only after a loop-back has been recorded on the task (or to a
+    # verifier). Planning a roster into them is refused — that is the zero-slack blunder.
+    "reserved_loopback_spawns": 2,
 }
 VERIFIER_AGENT_RE = re.compile(r"verifier", re.I)
+CHECKER_ROLE_RE = re.compile(r"\b(security|review\w*|verif\w*|qa)\b", re.I)
+
+# Evidence that reads like a deferral cannot back a `verified` verdict (real run
+# 2026-09-09, T-002: five criteria stored as verified with evidence "HUMAN-RUN ... pending"
+# and "SUPERSEDED ... satisfied-by-supersession", so `verify --require` exited 0 and the
+# report claimed complete). The canonical verdicts for those cases exist; use them.
+DEFERRAL_EVIDENCE_RE = re.compile(
+    r"\b(pending|human[- ]run|supersed\w*|skip(ped|s)?|not (yet )?(run|executed|tested|"
+    r"exercised|verified)|cannot be (run|verified|tested)|deferred|out of scope|"
+    r"manual(ly)? (confirm\w*|run)|to be (run|verified|tested)|would (pass|succeed))\b", re.I)
+
+def reject_deferral_evidence(criterion, verdict, evidence):
+    if verdict == "verified" and DEFERRAL_EVIDENCE_RE.search(evidence or ""):
+        m = DEFERRAL_EVIDENCE_RE.search(evidence).group(0)
+        die(f"verify: {criterion} — evidence reads like a deferral ('{m}') but the verdict is "
+            f"'verified'. A criterion that was not executed is not verified: use "
+            f"manual_confirmation_required (awaits a human run), blocked, or "
+            f"not_reproducible; a superseded criterion is graded under its successor and "
+            f"dropped, not passed", 2)
 
 STATE_SCHEMA_VERSION = 2
 IDEMPOTENCY_KEEP = 200
@@ -687,6 +713,8 @@ def cmd_init(args):
                 cfg["max_total_loopbacks"] = args.max_total_loopbacks
             if args.reserve_verifier is not None:
                 cfg["reserved_verifier_spawns"] = args.reserve_verifier
+            if args.reserve_loopbacks is not None:
+                cfg["reserved_loopback_spawns"] = args.reserve_loopbacks
             with open(config_path(), "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
                 f.write("\n")
@@ -924,6 +952,15 @@ def cmd_append(args):
         }
         state["messages"].append(msg)
         state["next_msg_num"] += 1
+        # Risk-to-test law (real run 2026-09-09: R-OBS-A, a high RISK the SRE agent
+        # raised, was filed as "follow-up", survived a launch-review GO, and was proven a
+        # crash-loop only when the human asked for a rehearsal). A high-priority RISK opens
+        # a criterion slot `R-<msg-id>`; `verify --require` and `report` refuse until it
+        # carries a verdict — verified/failed after a test, or an honest blocked/
+        # manual_confirmation_required. "Follow-up" is not a verdict.
+        if args.type == "RISK" and str(args.priority).lower() == "high":
+            state.setdefault("open_risks", []).append({"msg": msg_id, "at": ts,
+                                                       "from": args.frm})
 
         out = f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})"
         idempotency_record(state, args.idempotency_key, fp, out)
@@ -1106,8 +1143,24 @@ def cmd_spawn(args):
                       f"(root {root}) — downgrade or drop an agent, or raise the cap "
                       f"consciously at init")
                 sys.exit(1)
-            reserve = int(cfg.get("reserved_verifier_spawns", 0) or 0)
-            if reserve and total + 1 > cap - reserve and not VERIFIER_AGENT_RE.search(args.agent):
+            is_verifier = bool(VERIFIER_AGENT_RE.search(args.agent))
+            reserve_lb = int(cfg.get("reserved_loopback_spawns", 0) or 0)
+            reserve_v = int(cfg.get("reserved_verifier_spawns", 0) or 0)
+            planning_cap = cap - reserve_v - reserve_lb
+            if (reserve_lb and total + 1 > planning_cap and not is_verifier
+                    and state.get("loopbacks", {}).get("total", 0) == 0):
+                warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
+                                      f"tree_total={total}/{cap} root={root} "
+                                      f"(planning cap {planning_cap}; {reserve_lb} slot(s) open "
+                                      f"only after a loop-back)")
+                print(f"BUDGET EXCEEDED: planning cap is {planning_cap} of {cap} — the next "
+                      f"{reserve_lb} slot(s) are RESERVED for loop-back work and open only once "
+                      f"`eaos loopback` has recorded one (tree total {total}/{cap}, root {root}). "
+                      f"Trim the roster or raise the cap consciously at init; never fold an "
+                      f"independent role into yourself to fit")
+                sys.exit(1)
+            reserve = reserve_v
+            if reserve and total + 1 > cap - reserve and not is_verifier:
                 warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
                                       f"tree_total={total}/{cap} root={root} "
                                       f"(last {reserve} slot(s) reserved for a verifier)")
@@ -1267,6 +1320,13 @@ def require_status(state):
     failed = [k for k, v in criteria.items() if v["verdict"] == "failed"]
     if failed:
         return False, f"failed criteria: {', '.join(failed)}", [], []
+    open_risks = [r["msg"] for r in state.get("open_risks", [])
+                  if f"R-{r['msg']}" not in criteria]
+    if open_risks:
+        return (False, "high RISK(s) without a verdict: " + ", ".join(open_risks) +
+                " — test each (verify --criterion R-<msg> --verdict verified|failed) or "
+                "defer honestly (blocked|manual_confirmation_required); 'follow-up' is not "
+                "a verdict", [], [])
     manual = [k for k, v in criteria.items() if v["verdict"] == MANUAL_CONFIRMATION_VERDICT]
     unresolved = [k for k, v in criteria.items() if v["verdict"] in UNRESOLVED_VERDICTS]
     return True, None, manual, unresolved
@@ -1341,6 +1401,8 @@ def cmd_verify(args):
             if state.get("status") == "blocked":
                 ensure_not_blocked(state, args.id)
 
+            for criterion, verdict, evidence in parsed:
+                reject_deferral_evidence(criterion, verdict, evidence)
             ts = now_iso()
             for criterion, verdict, evidence in parsed:
                 state.setdefault("criteria", {})[criterion] = {
@@ -1362,6 +1424,7 @@ def cmd_verify(args):
             "exactly the fantasy this tool exists to kill)", 2)
 
     verdict = canonicalize_verdict(args.verdict)
+    reject_deferral_evidence(args.criterion, verdict, args.evidence)
     with task_lock(args.id):
         state = load_state(args.id)
         fp = compute_request_fingerprint(
@@ -1725,6 +1788,19 @@ def cmd_audit(args):
         f"phase=DONE but no episode line — run `eaos episode close {args.id}`" if o_bad
         else "none")
 
+    # (p) checker role folded into the orchestrator (real run 2026-09-09: "Security
+    # RE-REVIEW folded: orchestrator performs the mechanical diff check", "design-phase
+    # security relay FOLDED", verifier's re-grade run by the orchestrator). A checker whose
+    # work the maker performs is not a checker. The war room is prose, so this is a
+    # heuristic like check (e): FOLD/FOLDED within 80 chars of a checker role name.
+    fold_hits = []
+    for ln in warroom_text.splitlines():
+        if re.search(r"\bFOLD(ED|S|ING)?\b", ln, re.I) and CHECKER_ROLE_RE.search(ln):
+            fold_hits.append(ln.strip()[:120])
+    add("checker_role_folded", not fold_hits,
+        f"{len(fold_hits)} line(s) fold a checker role into the maker (maker=checker): "
+        f"{fold_hits[:3]}" if fold_hits else "none")
+
     # (e) unresolved same-issue loop counters at/over ceiling without a BLOCKED/deadlock
     # note (a hard_blocker ledger entry, or a DEADLOCK/BLOCKED mention, for that issue)
     max_same = cfg["max_same_issue_loops"]
@@ -2046,6 +2122,9 @@ def build_parser():
     p_init.add_argument("--reserve-verifier", type=int, default=None, dest="reserve_verifier",
                         help="spawn slots at the top of the cap only a verifier may use "
                              "(default 1)")
+    p_init.add_argument("--reserve-loopbacks", type=int, default=None, dest="reserve_loopbacks",
+                        help="spawn slots that open only after a loop-back is recorded "
+                             "(default 2) — a roster is planned within cap minus reserves")
     p_init.set_defaults(func=cmd_init)
 
     p_task = sub.add_parser("task")

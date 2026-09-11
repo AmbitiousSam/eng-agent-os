@@ -10,7 +10,16 @@ and coordinated in-dir rollback detected; heads.jsonl rewrite out of scope, docu
 session in task-new idempotency; lock steals audited until `lock-steal-ack`. v3 spec FROZEN
 (docs/specs/2026-09-01-eaos-v3-architecture.md).
 
-**Position:** Round 5 fixes landed -> awaiting round 6 reproduction/review -> then Run 3.
+**Position:** Round 5 fixes landed; the 09-09 real run's seven blunder-fixes landed (2026-09-11)
+-> awaiting round 6 reproduction/review -> then Run 3.
+
+**09-11 changes (from the 09-09 run review):** verify refuses `verified` on deferral-shaped
+evidence; high RISK opens `R-<msg>` that --require/report demand a verdict for; cap 15 = 12
+planning + 2 loop-back + 1 verifier, `eaos spawn` refuses to plan into reserves; audit (p)
+flags checker roles folded into the orchestrator; setup.sh strips persona `model:` under
+inherit (doctor checks); intake: deliverable-class words are blocking questions, attribution
+constraints are ACs, deploy-shaped work carries an executed-rehearsal AC and a rehearsal gate
+before launch review; protocol body cap 400 chars (orchestrator wrote 87% of output tokens).
 
 **Real run 2026-09-09 (private repo, 3 tasks, production stakes, ~5h, ~262k output tokens):**
 hooks fired but every fire failed open — the binder demanded a literal `eaos` and the

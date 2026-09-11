@@ -33,6 +33,13 @@ against. Make the implicit explicit. Do not design or implement.
   a sane default, AND guessing wrong means real rework. Otherwise it's an assumption, not a question.
 - **Never** ask about naming, wording, reversible/low-cost choices, style, or anything the
   codebase already demonstrates — decide and note it.
+- **Exception that always wins: deliverable-class words.** *workflow, pipeline, CI/CD,
+  deploy, release, migration, rollout* in the ask are the one thing you may not default
+  (`routing.yaml > autonomy.clarification.always_ask_about`). Ask, in one line, what the
+  human means by it — or, if the codebase or a sibling repo demonstrates the house pattern,
+  cite that as the answer in the spec. "Most likely means X" for such a word is a spec bug.
+- **Identity/attribution constraints are ACs**, not assumptions; **deploy-shaped work gets
+  an executed-rehearsal AC** (`skills/requirement-intake`, rules 7 and 8).
 - **Cap blocking questions at `max_questions_per_run` and batch into one round.** If you have
   zero genuine blockers (the common case), emit none and hand off.
 - Every acceptance criterion must be checkable by QA. If complexity/signals are unclear, make a
