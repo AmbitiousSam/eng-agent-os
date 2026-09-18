@@ -129,3 +129,6 @@ Toy run created a task (fix 4 holds) but a guessed flag + chained finish closed 
 
 ## 2026-09-18 (night) — runs 11-12
 Run 11 premise-false, abandoned correctly. Run 12 = first full production feature on v4 (T17-10, +1000 lines, checker mutation-tested, verified, 9 min). Fixed: hook follows cd into worktrees (session-ws pointer), shared scenario evidence refused, spec ids win. Gates 169/86/22/127.
+
+## 2026-09-18 (night) — v4.1.0 + E0 harness
+Released v4.1.0 (run-driven fixes). Built E0 grader outside repo: discovery-based black-box, 39/39 on reference, 4/9 on base, six sabotage controls each lose only the targeted check. User corrected drift: goal is completing EAOS, not synergina backlog.

@@ -49,3 +49,5 @@ pre-registration). Grading harness not yet written.
 - No launch post until: hooks ✅, M-010 validated by a run, 30s demo clip.
 
 - 2026-09-18 late: runs 8-9 reviewed; hooks 1-of-6 resolved (artifact + resume-bind fix); see evals/results/2026-09-18-v4-first-runs.md
+
+- 2026-09-18 night: v4.1.0 released. E0 grading harness built + validated (evals/results/2026-09-18-E0-grading-harness.md); harness at ~/.eaos-holdouts/E0/ (never paste). E0 runs themselves still unrun (human, 64 messages).
