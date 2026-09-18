@@ -1788,6 +1788,18 @@ def cmd_episode_close(args):
             # with an open high RISK was refused by verify/report and still closed as
             # "verified" because this block only looked at criteria verdicts.
             ok_req, req_reason, manual_keys, unresolved_keys = require_status(state)
+            # Run 10: a mistyped `verify` (exit 2) sat in one chained command with
+            # `episode close`; the task closed "unverified" with ZERO criteria and the lead
+            # moved on. A task nobody judged is not an honest "unverified" — it is a skipped
+            # process. Closing it needs an explicit abandonment with a reason. Tasks that
+            # have criteria (failed, blocked, anything) still close honestly as before.
+            if not criteria_total and not args.amend and not args.abandon:
+                die("REFUSED: no criterion was ever recorded for this task — record one with "
+                    "`eaos verify <task> --criterion AC-1 --verdict verified|failed|... "
+                    "--evidence \"...\"`, or close it deliberately with "
+                    "`episode close <task> --abandon --reason \"...\"`", 1)
+            if args.abandon and not args.reason:
+                die("episode close --abandon needs --reason", 2)
             waivers = waived_units(state)
             if not ok_req:
                 verdict = "unverified"
@@ -1860,6 +1872,8 @@ def cmd_episode_close(args):
             clear_current_if_matches(args.id)  # M-007: release the global pointer
             retarget_session_maps_on_close(args.id, state.get("parent"))
 
+            if args.abandon:
+                warroom_log(args.id, f"[{ts}] EPISODE abandoned without a judgement: {args.reason}")
             warroom_log(args.id, f"[{ts}] EPISODE closed verdict={verdict} "
                                   f"close_revision={close_revision}")
     print(out)
@@ -3171,7 +3185,7 @@ def build_parser():
     p_verify = sub.add_parser("verify")
     p_verify.add_argument("id")
     p_verify.add_argument("--criterion", default=None)
-    p_verify.add_argument("--verdict", default=None, choices=list(VERIFY_VERDICTS),
+    p_verify.add_argument("--verdict", "--status", dest="verdict", default=None, choices=list(VERIFY_VERDICTS),
                           help="canonical: verified|failed|blocked|not_reproducible|"
                                "manual_confirmation_required. Aliases 'pass'->verified "
                                "and 'fail'->failed are accepted for compatibility but "
@@ -3198,6 +3212,9 @@ def build_parser():
     p_episode_close = episode_sub.add_parser("close")
     p_episode_close.add_argument("id")
     p_episode_close.add_argument("--amend", action="store_true")
+    p_episode_close.add_argument("--abandon", action="store_true",
+                                 help="close a task that was never judged (zero criteria)")
+    p_episode_close.add_argument("--reason", default=None)
     p_episode_close.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_episode_close.set_defaults(func=cmd_episode_close)
 

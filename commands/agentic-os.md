@@ -24,8 +24,11 @@ are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 
 `$E init && $E task new "<title>" --kind feature|bug|chore|incident|question --stakes toy|internal|production`
 
 **Always, at every stakes level and every task shape** (a doc, a merge, a two-line fix):
-`task new` first, criteria recorded with `$E verify`, and `verify --require`, `report`,
-`episode close` at the end. Stakes decide only how much sits between: toy = you do the work
+`task new` first, criteria recorded with
+`$E verify <task> --criterion AC-1 --verdict verified --evidence "<what ran, what happened>"`,
+and `verify --require`, `report`, `episode close` at the end — one command at a time; a
+non-zero exit stops you (exit 2 = read `--help`, fix, retry). Nothing to do after all?
+`$E episode close <task> --abandon --reason "..."`. Stakes decide only how much sits between: toy = you do the work
 yourself, no units, no checker; internal = plus an independent checker; production = plus
 `checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
 is never skipped above toy because the task "is just a merge" or "is just docs".

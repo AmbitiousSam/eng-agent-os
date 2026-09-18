@@ -54,3 +54,12 @@ design, so counting `.eaos/sessions/` after the fact showed only the one unclose
   `session bind --resume`, accepted only for an active task no other session claims.
 - **Legacy task dirs printed `no state.json for task: T-nnn`** on every scan (16 lines per
   command in synergina). Fix: scans skip dirs without state.json silently.
+
+## Run 10 (EAOS cd5ea4d) — toy one-line edit, T-036
+Fix 4 held: `task new` ran at toy stakes, no units, no checker; legacy-dir noise gone. Edit correct.
+**Failure:** the lead guessed `verify --status` (flag is `--verdict`; the front door never showed the
+syntax), got exit 2, and because `verify`, `verify --require`, `report`, `episode close` were one
+chained command, the task closed `unverified` with **zero criteria** and the lead moved on.
+Fixes: front door shows the verify line verbatim and says one command at a time; `--status` accepted
+as an alias; `episode close` refuses a task with zero criteria unless `--abandon --reason` (tasks
+with any recorded verdict still close honestly). T-036 stays closed-unverified as the record of it.

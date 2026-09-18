@@ -123,3 +123,6 @@
 
 ## 2026-09-18 (late) — runs 8-9
 Run 8 (resume T-035) proved cb1ed35 fixes hold: fixed ids, checker on merge shape, no history rewrite, closed verified. Found: resumed session never binds -> checker spawn uncounted; legacy dirs print noise. Fixed: `session bind --resume` via binder on `status --packet T-nnn`; silent scans. 'Hooks bound 1/6' was a measurement artifact (close removes bindings). Gates 166/82/22/127.
+
+## 2026-09-18 (night) — run 10
+Toy run created a task (fix 4 holds) but a guessed flag + chained finish closed it unverified with zero criteria. Fixed: verify syntax in front door, --status alias, zero-criteria close refused without --abandon --reason. Gates 168/82/22/127.

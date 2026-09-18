@@ -554,6 +554,7 @@ class TestEpisodeCloseIdempotency(EaosTestCase):
     def test_replay_without_amend_succeeds_but_bare_double_close_still_refused(self):
         self.init()
         tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
         rc, out1, err = run(self.cwd, "episode", "close", tid,
                              "--idempotency-key", "close-1")
         self.assertEqual(rc, 0, err)
@@ -1605,8 +1606,10 @@ class TestSessionScopedCurrent(EaosTestCase):
                            "--session", "s1")
         child = child.strip()
         self.assertEqual(self.resolve("s1")[1], child)
+        run(self.cwd, "verify", child, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
         run(self.cwd, "episode", "close", child)
         self.assertEqual(self.resolve("s1")[1], parent)
+        run(self.cwd, "verify", parent, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
         run(self.cwd, "episode", "close", parent)
         rc, out, err = self.resolve("s1")
         self.assertEqual(rc, 1)
@@ -1616,6 +1619,7 @@ class TestSessionScopedCurrent(EaosTestCase):
     def test_bind_refuses_closed_task_and_rejects_bad_ids(self):
         self.init()
         tid = self.new_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
         run(self.cwd, "episode", "close", tid)
         rc, out, err = run(self.cwd, "session", "bind", tid, "--session", "s1")
         self.assertEqual(rc, 1)
@@ -1819,6 +1823,7 @@ class TestDoneWithoutEpisodeClose(EaosTestCase):
         rc, c = self.check(tid)
         self.assertEqual(rc, 1)
         self.assertIn("episode close", c["detail"])
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
         rc, out, err = run(self.cwd, "episode", "close", tid)
         self.assertEqual(rc, 0, err)
         rc, c = self.check(tid)
@@ -2743,6 +2748,25 @@ class TestSessionResumeBind(V4Case):
         rc, out, err = run(self.cwd, "task", "new", "third", "--kind", "chore")
         self.assertEqual(rc, 0, err)
         self.assertNotIn("no state.json", out + err)
+
+
+class TestCloseNeedsAJudgement(V4Case):
+    """Run 10: a mistyped verify chained with episode close shut the task with zero criteria."""
+
+    def test_zero_criteria_close_refused_then_abandon_or_verify(self):
+        other = run(self.cwd, "task", "new", "never judged", "--kind", "chore", "--stakes", "toy")[1].strip().splitlines()[-1]
+        rc, out, err = run(self.cwd, "episode", "close", other)
+        self.assertEqual(rc, 1)
+        self.assertIn("--abandon", err)
+        self.assertEqual(run(self.cwd, "episode", "close", other, "--abandon")[0], 2)
+        rc, out, err = run(self.cwd, "episode", "close", other, "--abandon", "--reason", "nothing to fix")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("unverified", out)
+
+    def test_status_is_an_alias_of_verdict(self):
+        rc, out, err = run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--status", "verified",
+                           "--evidence", "grep found the line")
+        self.assertEqual(rc, 0, err)
 
 
 if __name__ == "__main__":
