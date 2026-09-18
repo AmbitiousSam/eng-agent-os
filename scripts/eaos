@@ -1902,14 +1902,8 @@ def cmd_audit(args):
         f"state={n_state_spawns} warroom_spawn_lines={n_warroom_spawns} "
         f"task/agent_mentions={task_agent_mentions}")
 
-    # (b) phase INTAKE while spawns/criteria/gates already exist
-    has_progress = (n_state_spawns > 0 or bool(state.get("criteria")) or
-                    bool(state.get("gates")))
-    b_ok = not (state.get("phase") == "INTAKE" and has_progress)
-    add("phase_intake_consistency", b_ok,
-        f"phase={state.get('phase')} spawns={n_state_spawns} "
-        f"criteria={len(state.get('criteria', {}))} gates={len(state.get('gates', {}))}")
-
+    # (b) retired in v4: phases are optional, so "progress while in INTAKE" is not drift.
+    # Real runs 4 and 5 (2026-09-18) wasted turns advancing the phase to satisfy it.
     # (c) messages count 0 while warroom has protocol "### " or "- id: msg-" entries
     has_msg_evidence = bool(re.search(r"^### ", warroom_text, re.M) or
                              re.search(r"- id: msg-", warroom_text))

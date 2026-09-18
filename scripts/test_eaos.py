@@ -780,9 +780,9 @@ class TestAudit(EaosTestCase):
         self.assertEqual(rc, 1)
         report = json.loads(out)
         by_name = {c["name"]: c["ok"] for c in report["checks"]}
-        self.assertFalse(by_name["phase_intake_consistency"])
+        self.assertNotIn("phase_intake_consistency", by_name)   # retired in v4
         self.assertFalse(by_name["messages_vs_warroom"])
-        self.assertGreaterEqual(report["discrepancy_count"], 2)
+        self.assertGreaterEqual(report["discrepancy_count"], 1)
 
 
 class TestSchemaMigration(EaosTestCase):

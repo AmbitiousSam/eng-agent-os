@@ -8,7 +8,11 @@ setup.sh cleans up v1-v3 installs (280 agency-agents, 17 personas, skills, playb
 rewritten for the v4 layout. v3 preserved at tag `e0-baseline` for E0. Spec DRAFT rev 2 with an
 implementation note; freeze needs E0/E1 outcomes + tests per contract.
 
-**Position (2026-09-18 end):** v4.0.0 released; v3 backed up on branch `v3` + release v3.0.0;
+**Position (2026-09-18, after first runs):** 7 real runs on v4.0.0 done — see
+evals/results/2026-09-18-v4-first-runs.md (scorecard + 5 findings). Fixes from them in progress:
+front door (human gate for history rewrites, checker unconditional above toy, fixed criterion
+ids, task/verify/close unconditional), audit check (b) removed. OPEN: hooks bound 1/6 sessions.
+Earlier position: v4.0.0 released; v3 backed up on branch `v3` + release v3.0.0;
 scenarios (K-3) built. NEXT: real runs under v4, then review rounds on the runs. Runtime surface
 is FROZEN: no new verb without a run showing the need.
 Earlier: v4 review round 1 (871d3d0) answered: 6 findings reproduced + fixed (unavailable != ready,

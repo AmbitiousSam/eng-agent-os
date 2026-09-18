@@ -115,3 +115,8 @@
   reviewer's scripts). Scenarios (K-3) built: `eaos scenario add|list|grade`, outside the
   workspace, binding on completion. v3 backed up: branch `v3`, release v3.0.0. v4.0.0 released.
   Runtime surface frozen; next is real runs, not reviews.
+- 2026-09-18 (runs): 7 real runs on v4.0.0 in synergina-app. 5/6 tasked runs closed honestly incl.
+  one CONDITIONAL; scenarios graded 14/14; checker caught real bugs twice; 12 spawns total vs 12
+  per task in v3. Failures: run 1 skipped the runtime (toy read as "no EAOS"); run 7 production
+  merge with no checker + shared-branch rebase; phase check wasted turns; criterion id drift;
+  hooks bound 1/6 sessions. Record: evals/results/2026-09-18-v4-first-runs.md.

@@ -22,9 +22,15 @@ are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 
 
 `$E init && $E task new "<title>" --kind feature|bug|chore|incident|question --stakes toy|internal|production`
 
-Stakes decide ceremony (`~/.claude/eaos/routing.yaml > stakes`): toy = build and verify;
-internal = plus an independent checker; production = plus `checklists/security.md` and an
-executed rehearsal for anything deploy-shaped. Two words in the ask are never assumed:
+**Always, at every stakes level and every task shape** (a doc, a merge, a two-line fix):
+`task new` first, criteria recorded with `$E verify`, and `verify --require`, `report`,
+`episode close` at the end. Stakes decide only how much sits between: toy = you do the work
+yourself, no units, no checker; internal = plus an independent checker; production = plus
+`checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
+is never skipped above toy because the task "is just a merge" or "is just docs".
+**Criterion ids are fixed at intake**: `AC-1..AC-n` for acceptance criteria, `S-n` for
+scenarios, `R-B-nnn` for risks. Everyone, the checker included, grades exactly those ids and
+invents no others. Two words in the ask are never assumed:
 a deliverable class (*workflow, pipeline, CI/CD, deploy, release, migration, rollout*) is a
 blocking question unless the codebase shows the house pattern; an identity or attribution
 constraint (author, e-mail form, "only my name") becomes an acceptance criterion. Never add
@@ -64,6 +70,11 @@ Spawn help through the Agent tool with these definitions and **only** these inpu
 
 Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
 task is BLOCKED on the human (`$E loopback --class hard_blocker`), never "checked by me".
+
+**Human gate, always, before doing any of these:** push or merge to a shared branch, deploy,
+run a migration, spend money, delete data, and **rewriting history on any branch you did not
+create in this task** (rebase, force-push, filter-branch, amend of a pushed commit). Prepare
+it, show the exact command, and stop.
 
 ## Checklists (load on demand from `~/.claude/eaos/checklists/`)
 
