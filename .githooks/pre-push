@@ -2,7 +2,7 @@
 # EAOS pre-push hook — blocks `git push` unless the FULL test entrypoint passes.
 # Runs the same steps as `make test` (make itself may be unavailable, e.g. unaccepted
 # Xcode license on macOS), so "validation passed" means exactly what CI will check.
-# Enable once with:  git config core.hooksPath .githooks   (or: ./scripts/install-hooks.sh)
+# Enable once with:  git config core.hooksPath .githooks   (or: make hooks)
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -15,11 +15,10 @@ while IFS= read -r -d '' s; do
 done < <(find . -type f \( -name '*.sh' -o -path './.githooks/*' \) -not -path './vendor/*' -not -path './node_modules/*' -not -path './.git/*' -print0)
 
 if command -v python3 >/dev/null 2>&1; then
-  python3 scripts/validate-eaos.py || fail=1
-  python3 scripts/eval_check.py   || fail=1
-  python3 scripts/test_eaos.py    || fail=1
-  bash scripts/test_eaos_hooks.sh || fail=1
-  bash scripts/test_setup_cleanup.sh || fail=1
+  python3 tests/validate-eaos.py || fail=1
+  python3 tests/test_eaos.py    || fail=1
+  bash tests/test_eaos_hooks.sh || fail=1
+  bash tests/test_setup_cleanup.sh || fail=1
 else
   # FAIL CLOSED: a "blocking" gate that skips its own checks is a lie. No python3 means the
   # validator, eval check, and runtime tests cannot run — so the push cannot be verified.

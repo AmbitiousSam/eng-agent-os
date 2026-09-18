@@ -17,8 +17,8 @@ and no phase pipeline. Role knowledge lives in short checklists loaded on demand
 
 Status: v4.0.0 is the current release, implemented and under evaluation. v3 lives on the
 `v3` branch (release v3.0.0). The design is
-`docs/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until experiments E0/E1 report);
-v3 is preserved at tag `e0-baseline`. Evidence so far is in `evals/`; read
+`lab/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until experiments E0/E1 report);
+v3 is preserved at tag `e0-baseline`. Evidence so far is in `lab/evals/`; read
 `docs/EVAL-PROTOCOL.md` before believing any claim here, including this one.
 
 ## Quickstart (Claude Code)
@@ -26,13 +26,13 @@ v3 is preserved at tag `e0-baseline`. Evidence so far is in `evals/`; read
 ```bash
 git clone https://github.com/AmbitiousSam/eng-agent-os.git && cd eng-agent-os
 ./setup.sh                       # installs the front door, 3 boundary agents, checklists, runtime
-./scripts/install-eaos-hooks.sh  # optional: spawn budget, audit and context size without model cooperation
-./scripts/eaos-doctor.sh         # verify
+./runtime/install-eaos-hooks.sh  # optional: spawn budget, audit and context size without model cooperation
+./runtime/eaos-doctor.sh         # verify
 ```
 
 `setup.sh` also cleans up what earlier EAOS versions installed (personas, the agency-agents
 library, skills, playbooks): a file is removed only if its content matches the manifest of
-what EAOS shipped (`install/legacy-manifest.sha256`); anything customised or unknown is
+what EAOS shipped (`runtime/legacy-manifest.sha256`); anything customised or unknown is
 quarantined under `~/.claude/eaos/quarantine/` with a manifest. `./setup.sh --dry-run`
 prints the plan first. Restart Claude Code, then from inside any project:
 
@@ -50,11 +50,11 @@ Follow-ups are plain messages. On a fresh context for an existing task, run
 | `commands/agentic-os.md` | the front door, about 80 lines, loaded once |
 | `agents/eaos-{builder,reader,checker}.md` | the three boundaries, tool-scoped, no personas |
 | `checklists/` | intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
-| `scripts/eaos` | the runtime: task, unit, board, check, snapshot, scenario, writer, verify, report, audit, episode, session, ctx |
-| `scripts/eaos-hook.sh` | Claude Code hooks: spawn budget, session binding, audit, context measurement |
-| `orchestrator/routing.yaml` | stakes dial, budgets, adapter capability levels |
-| `docs/specs/` | v4 draft, v3 (frozen, superseded on freeze only) |
-| `evals/` | protocol, pre-registrations, measured results |
+| `runtime/eaos` | the runtime: task, unit, board, check, snapshot, scenario, writer, verify, report, audit, episode, session, ctx |
+| `runtime/eaos-hook.sh` | Claude Code hooks: spawn budget, session binding, audit, context measurement |
+| `runtime/routing.yaml` | stakes dial, budgets, adapter capability levels |
+| `lab/specs/` | v4 draft, v3 (frozen, superseded on freeze only) |
+| `lab/evals/` | protocol, pre-registrations, measured results |
 
 ## Trust model
 

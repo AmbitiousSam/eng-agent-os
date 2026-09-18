@@ -1,0 +1,62 @@
+# EAOS v4 runtime configuration. Read by the front door (commands/agentic-os.md), the
+# runtime CLI defaults (runtime/eaos mirrors `budget` into .eaos/config.json at init),
+# setup.sh (models.mode) and the doctor. There is no agent roster and no phase pipeline:
+# the model routes (lab/specs/2026-09-17-eaos-v4-architecture.md, section 1).
+
+version: 4
+
+models:
+  # inherit: every spawn uses the model the human selected for the session. setup.sh
+  # strips any `model:` pin from the installed agent definitions when this is `inherit`.
+  # The 2026-09-09 run showed a pinned command running 68/68 command-origin turns on a
+  # model the human had not chosen.
+  mode: inherit
+
+# ---- Stakes: what breaks if this is wrong. Sets how much of the conscience fires. ----
+stakes:
+  levels: [toy, internal, production]
+  toy:          # nothing deploys, no real users/money/data at risk
+    checker: optional
+    checklists: [build]
+  internal:     # real users are teammates; blast radius is inconvenience
+    checker: required
+    checklists: [build, review, test-adequacy]
+  production:   # external users, money paths, PII, anything deploy-bound
+    checker: required
+    checklists: [build, review, security, test-adequacy, deploy-rehearsal, operability]
+    rehearsal: required     # deploy-shaped work must EXECUTE before it can be verified
+  # Deliverable-class words in the ask are never assumed (checklists/intake.md):
+  always_ask_about: [workflow, pipeline, ci/cd, deploy, release, migration, rollout]
+
+# ---- Budgets (mirrored into .eaos/config.json by `eaos init`) ----
+budget:
+  max_agent_spawns_per_task: 15    # 12 planning + 2 loop-back + 1 verifier
+  reserved_verifier_spawns: 1      # the top slot is a checker's, always
+  reserved_loopback_spawns: 2      # open only after `eaos loopback` records one
+  max_parallel_readers: 4          # readers contribute intelligence, budgeted
+  max_context_tokens: 150000       # advisory ceiling for the lead (v4 C-4)
+  required_checks: [test]          # a build unit's READY handoff needs this evidence
+  board_view_budget: {lead: 1500, unit: 1500, checker: 2500, packet: 800}
+
+# ---- Loop guard (unchanged from v3; enforced by `eaos loopback`) ----
+loop_guard:
+  max_same_issue_loops: 3
+  max_total_loopbacks: 8
+
+# ---- Adapters: capability, not equality (spec section 11) ----
+# enforced = a runtime or hook refuses the wrong action; measured = a runtime records it;
+# advisory = documented rule, nothing stops a violation; planned = not built.
+adapters:
+  claude-code:
+    fresh_context_unit: enforced          # Agent tool subagent
+    checker_without_maker_transcript: advisory   # prompt construction; artifacts readable
+    scenarios_hidden_from_maker: advisory
+    spawn_budget_gate: enforced           # PreToolUse hook -> eaos spawn (fail-open on infra)
+    stop_time_audit: enforced             # Stop hook -> eaos audit (fail-open on infra)
+    writer_lease: advisory                # runtime lease; edits are not gated
+    context_ceiling: measured             # Stop hook -> eaos ctx; cannot force a reset
+    check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff + verify --require
+    bootstrap_loaded_once: advisory       # the command says not to re-run it; nothing prevents expansion
+    unit_state_reaches_completion: enforced      # blocked/stale/active units and void evidence refuse --require
+  cursor: {fresh_context_unit: manual, everything_else: advisory}
+  codex: {fresh_context_unit: manual, everything_else: advisory}

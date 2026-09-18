@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # EAOS v4 bootstrap — install the Engineering Agentic OS on any machine, and clean up
 # what earlier versions installed. Idempotent; safe to re-run. Requires: Claude Code
-# (~/.claude), python3, git. Never wires hooks (opt in: scripts/install-eaos-hooks.sh).
+# (~/.claude), python3, git. Never wires hooks (opt in: runtime/install-eaos-hooks.sh).
 # `./setup.sh --dry-run` prints the cleanup plan and changes nothing.
 set -euo pipefail
 
@@ -27,13 +27,13 @@ install_file() {
 
 # ---------------------------------------------------------------------------------------
 # 1) CLEANUP of earlier EAOS versions (v1-v3), manifest-based (v4 review 1, finding 6).
-#    A file is REMOVED only if its content hash appears in install/legacy-manifest.sha256
+#    A file is REMOVED only if its content hash appears in runtime/legacy-manifest.sha256
 #    (the exact bytes an earlier setup.sh installed). A file at a legacy path whose content
 #    is not listed — customised, or never ours — is QUARANTINED (moved, with a manifest of
 #    what moved where), never deleted. `setup.sh --dry-run` prints the plan and changes
 #    nothing. Project-local .eaos/ directories are never touched.
 # ---------------------------------------------------------------------------------------
-MANIFEST="$EAOS_DIR/install/legacy-manifest.sha256"
+MANIFEST="$EAOS_DIR/runtime/legacy-manifest.sha256"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 QUAR="$CONFIG_DIR/quarantine/$(date +%Y%m%d-%H%M%S)"
@@ -108,7 +108,7 @@ install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
 
 # Boundary agent definitions. Under models.mode: inherit any `model:` frontmatter line is
 # stripped so a spawn always runs on the session's model.
-MODELS_MODE="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/orchestrator/routing.yaml")"
+MODELS_MODE="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/runtime/routing.yaml")"
 MODELS_MODE="${MODELS_MODE:-inherit}"
 say "Installing boundary agents -> $AGENTS_DIR (models.mode=$MODELS_MODE)"
 STRIP_TMP="$(mktemp -d)"
@@ -126,7 +126,7 @@ done
 rm -rf "$STRIP_TMP"
 
 say "Installing config, checklists, templates, adapters -> $CONFIG_DIR"
-install_file "$EAOS_DIR/orchestrator/routing.yaml" "$CONFIG_DIR/routing.yaml"
+install_file "$EAOS_DIR/runtime/routing.yaml" "$CONFIG_DIR/routing.yaml"
 for f in "$EAOS_DIR"/checklists/*.md; do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/checklists/$(basename "$f")"; done
 for f in "$EAOS_DIR"/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
 install_file "$EAOS_DIR/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
@@ -134,8 +134,8 @@ install_file "$EAOS_DIR/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.m
 for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/checklists/$(basename "$f")" ] && rm -f "$f"; done
 
 say "Installing eaos runtime CLI + hook accelerator -> $CONFIG_DIR/bin"
-install_file "$EAOS_DIR/scripts/eaos" "$CONFIG_DIR/bin/eaos"
-install_file "$EAOS_DIR/scripts/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
+install_file "$EAOS_DIR/runtime/eaos" "$CONFIG_DIR/bin/eaos"
+install_file "$EAOS_DIR/runtime/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
 chmod +x "$CONFIG_DIR/bin/eaos" "$CONFIG_DIR/bin/eaos-hook.sh"
 
 # ---------------------------------------------------------------------------------------
@@ -154,6 +154,6 @@ printf "  \033[0;32m✓\033[0m %s files present; legacy agency-agents remaining:
 [ "$bad" -eq 0 ] || { say "Install incomplete."; exit 1; }
 say ""
 say "Installed. Runtime state is PROJECT-LOCAL (./.eaos/ in the project you run it in)."
-say "Hooks are opt-in:   ./scripts/install-eaos-hooks.sh"
+say "Hooks are opt-in:   ./runtime/install-eaos-hooks.sh"
 say "Usage in Claude Code (restart it after first install):   /agentic-os <task>"
 say "Follow-ups are plain messages. Fresh context on an existing task: eaos status --packet"

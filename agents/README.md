@@ -2,7 +2,7 @@
 
 v4 has no persona roster. These three files exist because a boundary is where tool scope
 and a fresh context live, and the evidence says the boundary is what matters, not the
-costume (`docs/research/2026-09-17-software-factories-study.md`, section 4).
+costume (`lab/research/2026-09-17-software-factories-study.md`, section 4).
 
 | File | Boundary | Tools |
 |---|---|---|
@@ -12,4 +12,4 @@ costume (`docs/research/2026-09-17-software-factories-study.md`, section 4).
 
 Role knowledge lives in `checklists/`, loaded on demand. The 17 v3 personas were
 parity-extracted into those checklists before deletion:
-`docs/reviews/2026-09-18-parity-extraction.md`.
+`lab/reviews/2026-09-18-parity-extraction.md`.

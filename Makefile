@@ -1,38 +1,33 @@
 # Engineering Agentic OS — common tasks
-.PHONY: help install doctor validate check test hooks push eval
+.PHONY: help install doctor validate check test hooks
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install EAOS into ~/.claude (clones agency-agents, installs command + agents + config)
+install: ## Install EAOS into ~/.claude (front door, 3 boundary agents, checklists, runtime)
 	@./setup.sh
 
 hooks: ## Enable the pre-push validation gate (git push runs validation first)
-	@bash scripts/install-hooks.sh
+	@git config core.hooksPath .githooks && echo 'pre-push gate enabled'
 
 doctor: ## Check install + current project readiness
-	@bash scripts/eaos-doctor.sh
+	@bash runtime/eaos-doctor.sh
 
-validate: ## Mechanically validate repo consistency (routing, personas, templates)
-	@python3 scripts/validate-eaos.py
+validate: ## Mechanically validate repo consistency (layout, agents, checklists, routing)
+	@python3 tests/validate-eaos.py
 
-eval: ## Schema-validate the routing eval fixture (evals/routing-golden.yaml)
-	@python3 scripts/eval_check.py
 
-test: ## Syntax-check shell scripts + run the validator + the eval-fixture check
-	@for s in setup.sh scripts/eaos-doctor.sh scripts/push-to-github.sh scripts/install-hooks.sh \
-	          scripts/eaos-hook.sh scripts/install-eaos-hooks.sh scripts/test_eaos_hooks.sh \
-	          scripts/e0_packet.sh scripts/e0_env.sh scripts/test_setup_cleanup.sh \
+test: ## Syntax-check shell scripts + run the validator
+	@for s in setup.sh runtime/eaos-doctor.sh \
+	          runtime/eaos-hook.sh runtime/install-eaos-hooks.sh tests/test_eaos_hooks.sh \
+	          lab/scripts/e0_packet.sh lab/scripts/e0_env.sh tests/test_setup_cleanup.sh \
 	          .githooks/pre-push; do \
 	  bash -n "$$s" && echo "$$s: syntax OK"; done
-	@python3 scripts/validate-eaos.py
-	@python3 scripts/eval_check.py
-	@python3 scripts/test_eaos.py
-	@bash scripts/test_eaos_hooks.sh
-	@bash scripts/test_setup_cleanup.sh
+	@python3 tests/validate-eaos.py
+	@python3 tests/test_eaos.py
+	@bash tests/test_eaos_hooks.sh
+	@bash tests/test_setup_cleanup.sh
 
 check: test ## Alias for test (CI entrypoint)
 
-push: validate ## Validate, then create/push the GitHub repo (push only after validation)
-	@./scripts/push-to-github.sh

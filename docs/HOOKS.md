@@ -1,7 +1,7 @@
 # Hook accelerators (M-007, mechanisms.yaml)
 
 **What they do:** three Claude Code hooks — `PreToolUse` (matcher `Task|Agent`),
-`PostToolUse` (matcher `Bash`) and `Stop` — all invoke `scripts/eaos-hook.sh`, which
+`PostToolUse` (matcher `Bash`) and `Stop` — all invoke `runtime/eaos-hook.sh`, which
 shells out to the real `eaos` CLI so `eaos spawn` and `eaos audit` happen without the
 model choosing to run them, so the session is bound to its task the moment
 `eaos task new` runs, and (v4, advisory) so the lead's context size is recorded from the
@@ -108,7 +108,7 @@ audit discrepancy until a human reviews the state and acknowledges it with
 
 ## Adapter tests
 
-`scripts/test_eaos_hooks.sh` feeds crafted hook JSON to `eaos-hook.sh` in a real tempdir
+`tests/test_eaos_hooks.sh` feeds crafted hook JSON to `eaos-hook.sh` in a real tempdir
 project and asserts, scenario by scenario: (a) a spawn is recorded; (b) idempotent under a
 repeated `tool_use_id`; (c) an over-budget spawn blocks with `BUDGET EXCEEDED` in stderr;
 (d) no task, (e) a non-Task/Agent tool, and a JSON parse failure all fail open silently;
@@ -131,8 +131,8 @@ wires it into `settings.json` — that's a real fail-closed gate on your own fut
 calls, so it's opt-in:
 
 ```
-./scripts/install-eaos-hooks.sh              # merge our three hook entries in
-./scripts/install-eaos-hooks.sh --uninstall  # remove only our entries
+./runtime/install-eaos-hooks.sh              # merge our three hook entries in
+./runtime/install-eaos-hooks.sh --uninstall  # remove only our entries
 ```
 
 The installer backs up `settings.json` to `settings.json.bak-<ns>-<pid>` (exclusive
