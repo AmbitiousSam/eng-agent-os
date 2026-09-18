@@ -367,7 +367,7 @@ mkdir -p "$CLAUDE_HOME/eaos/bin"; cp "$HOOK" "$CLAUDE_HOME/eaos/bin/eaos-hook.sh
 printf '{"env":{"SECRET":"1"}}\n' > "$CLAUDE_HOME/settings.json"; chmod 600 "$CLAUDE_HOME/settings.json"
 bash "$INSTALL" >/dev/null 2>&1
 assert_eq "(m) install exit 0" "0" "$?"
-mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode_of() { python3 -c 'import os,sys; print(format(os.stat(sys.argv[1]).st_mode & 0o777, "o"))' "$1"; }
 assert_eq "(m) settings.json stays 0600" "600" "$(mode_of "$CLAUDE_HOME/settings.json")"
 bk="$(ls "$HDIR"/settings.json.bak-* | head -1)"
 assert_eq "(m) backup is 0600" "600" "$(mode_of "$bk")"
