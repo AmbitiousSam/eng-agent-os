@@ -135,3 +135,6 @@ Released v4.1.0 (run-driven fixes). Built E0 grader outside repo: discovery-base
 
 ## 2026-09-18 (late night) — v4.2.0 restructure
 User: repo looks a mess; no separate CLI wanted. Clarified the script is the agent's tool and the host-agnostic part; user agreed to cleanup + AGENTS.md. Done: 122->72 files, runtime/ tests/ lab/ layout, AGENTS.md pointer entry, before-state + scope-check lines from michaelshimeles/skills. Did NOT cut v3 verbs (measured coupling: 63 tests). Gates 169/86/22/127.
+
+## 2026-09-18 (late night) — product finish
+User: not yet a product; wants one-step install, AI-followable instructions, global use without copying AGENTS.md. Built install.sh (curl|bash -> ~/.eaos-src, setup, hooks if claude present, doctor); setup.sh generates ~/.agents/skills/agentic-os/SKILL.md from the one front door (Cursor+Codex load that dir; verified in Cursor docs + Codex docs); --uninstall; README rewritten. Verified real curl one-liner in isolated homes -> Healthy. Open: no LICENSE file (user decision); Cursor/Codex path never exercised on a real task.
