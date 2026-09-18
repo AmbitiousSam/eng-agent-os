@@ -77,6 +77,10 @@ war room + artifacts lets the orchestrator continue from the last completed phas
   type: QUESTION
   ref: .eaos/T-101/artifacts/design-doc.md#caching
   priority: blocking         # blocking | normal | fyi
+  severity: high             # RISK only, REQUIRED: low | medium | high | blocking.
+                             # `eaos append --severity`. high/blocking open R-<msg-id>,
+                             # which verify --require / report / episode close demand a
+                             # verdict for. A RISK with no severity is refused.
   body: >
     One or two tight sentences: the issue + what you need to proceed.
 ```

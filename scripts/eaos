@@ -57,6 +57,32 @@ CHECKER_ROLE_RE = re.compile(r"\b(security|review\w*|verif\w*|qa)\b", re.I)
 # 2026-09-09, T-002: five criteria stored as verified with evidence "HUMAN-RUN ... pending"
 # and "SUPERSEDED ... satisfied-by-supersession", so `verify --require` exited 0 and the
 # report claimed complete). The canonical verdicts for those cases exist; use them.
+RISK_SEVERITIES = {"low": "low", "med": "medium", "medium": "medium", "high": "high",
+                   "critical": "blocking", "blocking": "blocking", "blocker": "blocking"}
+RISK_REGISTERED_SEVERITIES = ("high", "blocking")
+RISK_BODY_SEVERITY_RE = re.compile(
+    r"\bsever\w*\s*[:=-]?\s*(low|med|medium|high|critical|blocking|blocker)\b", re.I)
+
+def resolve_risk_severity(flag, priority, body):
+    """--severity wins; then the body; then legacy priority words. `priority: blocking`
+    can only raise the result, never lower it."""
+    sev = None
+    if flag:
+        # An explicit flag WINS or FAILS — it never falls through. `--severity hihg
+        # --priority low` used to be accepted as low (review 3, finding 2).
+        sev = RISK_SEVERITIES.get(str(flag).lower())
+        if sev is None:
+            die(f"append: invalid --severity '{flag}' — use low|medium|high|blocking", 2)
+    if sev is None:
+        m = RISK_BODY_SEVERITY_RE.search(body or "")
+        if m:
+            sev = RISK_SEVERITIES[m.group(1).lower()]
+    if sev is None:
+        sev = RISK_SEVERITIES.get(str(priority or "").lower())
+    if str(priority or "").lower() == "blocking":
+        sev = "blocking"
+    return sev
+
 DEFERRAL_EVIDENCE_RE = re.compile(
     r"\b(pending|human[- ]run|supersed\w*|skip(ped|s)?|not (yet )?(run|executed|tested|"
     r"exercised|verified)|cannot be (run|verified|tested)|deferred|out of scope|"
@@ -261,6 +287,12 @@ def read_lock_events():
             except json.JSONDecodeError:
                 continue
     return out
+
+def next_seq(state):
+    """The revision the pending save_state() will write. Used as a persisted, monotonic
+    event sequence: wall-clock timestamps have one-second resolution, so two consecutive
+    CLI calls routinely share one and cannot be ordered by it."""
+    return int(state.get("revision", 0) or 0) + 1
 
 def warroom_log(task_id, line):
     with open(warroom_path(task_id), "a", encoding="utf-8") as f:
@@ -931,14 +963,33 @@ def cmd_append(args):
         body_text = args.body
     body_text = body_text.rstrip("\n")
 
+    # A RISK must be classifiable, or the registry that `verify --require` trusts is
+    # incomplete by construction (v4 review 2, finding 1: `--priority blocking` with body
+    # "severity: high" was never registered, because registration keyed on priority ==
+    # "high" — a value protocol.md does not even define; its priority enum is
+    # blocking|normal|fyi and severity lives with the risk). Resolution order: --severity,
+    # then `severity: X` in the body, then a legacy priority of low/med/high. A priority
+    # of `blocking` always registers. No severity at all is a usage error, not a silent
+    # unregistered risk.
+    risk_severity = None
+    if args.type == "RISK":
+        risk_severity = resolve_risk_severity(args.severity, args.priority, body_text)
+        if risk_severity is None:
+            die("append: a RISK needs a severity — pass --severity low|medium|high|blocking "
+                "(or state `severity: <level>` in the body). An unclassified risk cannot be "
+                "registered, and an unregistered risk cannot block a false completion", 2)
+
     with task_lock(args.id):
         state = load_state(args.id)
-        fp = compute_request_fingerprint(
-            "append", args.id,
-            [("from", args.frm), ("to", args.to), ("type", args.type),
-             ("ref", args.ref), ("priority", args.priority)],
-            body_text=body_text,
-        )
+        fp_fields = [("from", args.frm), ("to", args.to), ("type", args.type),
+                     ("ref", args.ref), ("priority", args.priority)]
+        if args.type == "RISK":
+            # The RESOLVED severity decides whether this risk blocks completion, so it is
+            # part of the request: the same key with a different severity is a conflict,
+            # not a replay (review 3, finding 1). Added for RISK only, so keys recorded
+            # for other message types before this change still replay.
+            fp_fields.append(("severity", risk_severity))
+        fp = compute_request_fingerprint("append", args.id, fp_fields, body_text=body_text)
         idempotency_guard(state, args.idempotency_key, fp, "append", args.id)
         if state.get("status") == "blocked":
             ensure_not_blocked(state, args.id)
@@ -950,6 +1001,8 @@ def cmd_append(args):
             "id": msg_id, "from": args.frm, "to": to_list, "type": args.type,
             "ref": args.ref, "priority": args.priority, "body": body_text, "at": ts,
         }
+        if risk_severity:
+            msg["severity"] = risk_severity
         state["messages"].append(msg)
         state["next_msg_num"] += 1
         # Risk-to-test law (real run 2026-09-09: R-OBS-A, a high RISK the SRE agent
@@ -958,9 +1011,11 @@ def cmd_append(args):
         # a criterion slot `R-<msg-id>`; `verify --require` and `report` refuse until it
         # carries a verdict — verified/failed after a test, or an honest blocked/
         # manual_confirmation_required. "Follow-up" is not a verdict.
-        if args.type == "RISK" and str(args.priority).lower() == "high":
+        if args.type == "RISK" and risk_severity in RISK_REGISTERED_SEVERITIES:
             state.setdefault("open_risks", []).append({"msg": msg_id, "at": ts,
-                                                       "from": args.frm})
+                                                       "seq": next_seq(state),
+                                                       "from": args.frm,
+                                                       "severity": risk_severity})
 
         out = f"OK: {msg_id} appended ({args.type} {args.frm} -> {', '.join(to_list)})"
         idempotency_record(state, args.idempotency_key, fp, out)
@@ -1320,8 +1375,21 @@ def require_status(state):
     failed = [k for k, v in criteria.items() if v["verdict"] == "failed"]
     if failed:
         return False, f"failed criteria: {', '.join(failed)}", [], []
-    open_risks = [r["msg"] for r in state.get("open_risks", [])
-                  if f"R-{r['msg']}" not in criteria]
+    # A verdict only answers a risk if it was recorded AFTER the risk existed. Message ids
+    # are predictable, so without this a pre-dated `R-msg-007` could pre-clear a risk that
+    # had not been raised yet. Ordering uses the persisted revision sequence, never the
+    # wall clock: `at` has one-second resolution, so `>=` admitted a verdict recorded
+    # BEFORE its risk within the same second, and `>` would reject a legitimate one
+    # recorded just after it (review 4, finding 1). Legacy records: a risk with no `seq`
+    # predates ordering metadata and is treated as sequence 0; a VERDICT with no `seq`
+    # cannot be ordered and must be re-recorded. This is an ordering guard, not proof that
+    # the verdict's evidence addresses the risk — that remains uncertified (v4 spec R-7).
+    def answered(r):
+        v = criteria.get(f"R-{r['msg']}")
+        if not v or not isinstance(v.get("seq"), int):
+            return False
+        return v["seq"] > int(r.get("seq", 0) or 0)
+    open_risks = [r["msg"] for r in state.get("open_risks", []) if not answered(r)]
     if open_risks:
         return (False, "high RISK(s) without a verdict: " + ", ".join(open_risks) +
                 " — test each (verify --criterion R-<msg> --verdict verified|failed) or "
@@ -1406,7 +1474,8 @@ def cmd_verify(args):
             ts = now_iso()
             for criterion, verdict, evidence in parsed:
                 state.setdefault("criteria", {})[criterion] = {
-                    "verdict": verdict, "evidence": evidence, "at": ts}
+                    "verdict": verdict, "evidence": evidence, "at": ts,
+                    "seq": next_seq(state)}
                 warroom_log(args.id, f"[{ts}] VERIFY criterion={criterion} "
                                       f"verdict={verdict} evidence={evidence}")
             out = f"OK: {len(parsed)} criteria recorded via --bulk"
@@ -1439,6 +1508,7 @@ def cmd_verify(args):
         ts = now_iso()
         state.setdefault("criteria", {})[args.criterion] = {
             "verdict": verdict, "evidence": args.evidence, "at": ts,
+            "seq": next_seq(state),
         }
         out = f"OK: {args.criterion} = {verdict}"
         idempotency_record(state, args.idempotency_key, fp, out)
@@ -1636,16 +1706,20 @@ def cmd_episode_close(args):
             # manual_confirmation_required-only result may still be implementation-
             # complete (release just needs a human's sign-off), while partial
             # (any blocked/not_reproducible, no fails) means it is not.
-            if criteria_total == 0 or has_fail:
+            # ONE authoritative verdict calculation (v4 spec, runtime contract R-1):
+            # require_status() is what `verify --require` and `report` consume, so the
+            # episode record must be derived from it too. Reproduced 2026-09-17: a task
+            # with an open high RISK was refused by verify/report and still closed as
+            # "verified" because this block only looked at criteria verdicts.
+            ok_req, req_reason, manual_keys, unresolved_keys = require_status(state)
+            if not ok_req:
                 verdict = "unverified"
-            elif criteria_verified == criteria_total:
-                verdict = "verified"
-            elif has_unresolved:
+            elif unresolved_keys:
                 verdict = "partial"
-            elif has_manual:
+            elif manual_keys:
                 verdict = "conditional-manual"
             else:
-                verdict = "unverified"  # unreachable with the canonical enum; safe fallback
+                verdict = "verified"
 
             wall_seconds = None
             try:
@@ -2162,6 +2236,9 @@ def build_parser():
     p_append.add_argument("--file", default=None)
     p_append.add_argument("--ref", default=None)
     p_append.add_argument("--priority", default="normal")
+    p_append.add_argument("--severity", default=None,
+                          help="RISK only: low|medium|high|blocking. high and blocking open "
+                               "an R-<msg-id> slot that verify --require demands a verdict for")
     p_append.add_argument("--idempotency-key", dest="idempotency_key", default=None)
     p_append.set_defaults(func=cmd_append)
 

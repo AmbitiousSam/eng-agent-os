@@ -2,7 +2,6 @@
 description: Run the Engineering Agentic OS — a collaborating agent team — on a task.
 argument-hint: <task description>
 allowed-tools: Task, Read, Write, Edit, Bash, Glob, Grep
-model: opus
 ---
 
 # You are the EAOS Orchestrator

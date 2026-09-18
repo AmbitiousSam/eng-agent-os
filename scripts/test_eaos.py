@@ -1956,5 +1956,269 @@ class TestCheckerFoldAudit(EaosTestCase):
         self.assertTrue(c["ok"])
 
 
+class TestSingleVerdictAuthority(EaosTestCase):
+    """v4 runtime contract R-1: episode close derives its verdict from the same function
+    verify --require and report use. Reproduced 2026-09-17: open high RISK -> verify and
+    report refused, episode still recorded 'verified'."""
+
+    def test_open_high_risk_closes_as_unverified(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        run(self.cwd, "append", tid, "--from", "sre", "--to", "orchestrator", "--type", "RISK",
+            "--priority", "high", "--body", "crash-loop on next rebuild")
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 1)
+        self.assertEqual(run(self.cwd, "report", tid)[0], 1)
+        rc, out, err = run(self.cwd, "episode", "close", tid)
+        self.assertEqual(rc, 0, err)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            ep = json.loads(f.readlines()[-1])
+        self.assertEqual(ep["verdict"], "unverified")
+
+    def test_command_does_not_pin_a_model_under_inherit(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "commands", "agentic-os.md")) as f:
+            head = f.read().split("---")[1]
+        with open(os.path.join(root, "orchestrator", "routing.yaml")) as f:
+            routing = f.read()
+        if "\n  mode: inherit" in routing:
+            self.assertNotIn("\nmodel:", head,
+                             "command frontmatter pins a model while routing says inherit")
+
+
+class TestRiskRegistry(EaosTestCase):
+    """v4 review 2, finding 1: one verdict function guarantees agreement, not correctness.
+    The registry it trusts must not miss a protocol-shaped risk."""
+
+    def setup_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        return tid
+
+    def risk(self, tid, *extra, body="production crash remains unresolved"):
+        return run(self.cwd, "append", tid, "--from", "sre", "--to", "orchestrator",
+                   "--type", "RISK", "--body", body, *extra)
+
+    def test_protocol_shaped_risk_blocks_completion_and_episode(self):
+        """The reviewer's exact reproduction: priority blocking + 'severity: high' in body."""
+        tid = self.setup_task()
+        rc, out, err = self.risk(tid, "--priority", "blocking",
+                                 body="severity: high; production crash remains unresolved")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 1)
+        run(self.cwd, "phase", tid, "DONE")
+        run(self.cwd, "episode", "close", tid)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            self.assertEqual(json.loads(f.readlines()[-1])["verdict"], "unverified")
+
+    def test_every_registration_path(self):
+        for extra, body in ((("--severity", "high"), "x"), (("--severity", "critical"), "x"),
+                            (("--priority", "blocking"), "x"), (("--priority", "high"), "x"),
+                            ((), "Severity = HIGH, mitigation: none yet")):
+            tid = self.setup_task()
+            self.assertEqual(self.risk(tid, *extra, body=body)[0], 0, (extra, body))
+            self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 1, (extra, body))
+            self.tmp.cleanup(); self.setUp()
+
+    def test_unclassified_risk_is_refused_not_silently_dropped(self):
+        tid = self.setup_task()
+        rc, out, err = self.risk(tid)
+        self.assertEqual(rc, 2)
+        self.assertIn("needs a severity", err)
+
+    def test_low_and_medium_do_not_block(self):
+        tid = self.setup_task()
+        self.assertEqual(self.risk(tid, "--severity", "low")[0], 0)
+        self.assertEqual(self.risk(tid, "--severity", "medium", body="second")[0], 0)
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 0)
+
+
+class TestRiskSeverityContract(EaosTestCase):
+    """v4 review 3: severity is part of the request, and an explicit flag wins or fails."""
+
+    def setup_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        return tid
+
+    def test_same_key_different_severity_is_a_conflict(self):
+        tid = self.setup_task()
+        base = ["append", tid, "--from", "sre", "--to", "o", "--type", "RISK", "--body", "x",
+                "--idempotency-key", "risk-1"]
+        self.assertEqual(run(self.cwd, *base, "--severity", "low")[0], 0)
+        rc, out, err = run(self.cwd, *base, "--severity", "high")
+        self.assertEqual(rc, 1)
+        self.assertIn("IDEMPOTENCY CONFLICT", out + err)
+        rc, out, err = run(self.cwd, *base, "--severity", "low")      # exact retry
+        self.assertEqual(rc, 0)
+        self.assertIn("msg-001", out)
+        # equivalent spelling resolves to the same canonical severity -> still a replay
+        self.assertEqual(run(self.cwd, *base, "--severity", "LOW")[0], 0)
+
+    def test_invalid_explicit_severity_never_falls_back(self):
+        tid = self.setup_task()
+        rc, out, err = run(self.cwd, "append", tid, "--from", "sre", "--to", "o", "--type",
+                           "RISK", "--severity", "hihg", "--priority", "low",
+                           "--body", "severity: high")
+        self.assertEqual(rc, 2)
+        self.assertIn("invalid --severity", err)
+        rc, out, err = run(self.cwd, "status", tid)
+        self.assertNotIn("msg-001", out)
+
+    def test_valid_flag_still_escalated_by_blocking_priority(self):
+        tid = self.setup_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        self.assertEqual(run(self.cwd, "append", tid, "--from", "sre", "--to", "o", "--type",
+                             "RISK", "--severity", "low", "--priority", "blocking",
+                             "--body", "x")[0], 0)
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 1)
+
+    def test_verdict_recorded_before_the_risk_does_not_answer_it(self):
+        tid = self.setup_task()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        # pre-clear the predictable id, THEN raise the risk
+        run(self.cwd, "verify", tid, "--criterion", "R-msg-001", "--verdict", "verified",
+            "--evidence", "looks fine")
+        path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(path) as f:
+            st = json.load(f)
+        st["criteria"]["R-msg-001"]["at"] = "2020-01-01T00:00:00"   # make the order unambiguous
+        with open(path, "w") as f:
+            json.dump(st, f)
+        run(self.cwd, "append", tid, "--from", "sre", "--to", "o", "--type", "RISK",
+            "--severity", "high", "--body", "crash-loop")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("msg-001", out)
+
+
+class TestRiskVerdictOrdering(EaosTestCase):
+    """Review 4 finding 1: order by persisted sequence, not by a one-second wall clock."""
+
+    SAME = "2026-09-17T12:00:00"
+
+    def setup_task(self):
+        self.init()
+        tid = self.new_task()
+        run(self.cwd, "phase", tid, "DESIGN")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "tests green")
+        return tid
+
+    def force_same_second(self, tid):
+        path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(path) as f:
+            st = json.load(f)
+        for r in st.get("open_risks", []):
+            r["at"] = self.SAME
+        st["criteria"]["R-msg-001"]["at"] = self.SAME
+        with open(path, "w") as f:
+            json.dump(st, f)
+        return st
+
+    def risk(self, tid):
+        return run(self.cwd, "append", tid, "--from", "sre", "--to", "o", "--type", "RISK",
+                   "--severity", "high", "--body", "crash-loop")
+
+    def verdict(self, tid):
+        return run(self.cwd, "verify", tid, "--criterion", "R-msg-001", "--verdict",
+                   "verified", "--evidence", "rehearsal ran clean")
+
+    def test_verdict_before_risk_same_second_does_not_answer(self):
+        tid = self.setup_task()
+        self.verdict(tid)
+        self.risk(tid)
+        self.force_same_second(tid)
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("msg-001", out)
+
+    def test_verdict_after_risk_same_second_answers(self):
+        tid = self.setup_task()
+        self.risk(tid)
+        self.verdict(tid)
+        st = self.force_same_second(tid)
+        self.assertGreater(st["criteria"]["R-msg-001"]["seq"], st["open_risks"][0]["seq"])
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 0)
+
+    def test_legacy_verdict_without_sequence_must_be_re_recorded(self):
+        tid = self.setup_task()
+        self.risk(tid)
+        self.verdict(tid)
+        path = os.path.join(self.cwd, ".eaos", tid, "state.json")
+        with open(path) as f:
+            st = json.load(f)
+        del st["criteria"]["R-msg-001"]["seq"]          # a record from before this change
+        del st["open_risks"][0]["seq"]
+        with open(path, "w") as f:
+            json.dump(st, f)
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 1)
+        self.verdict(tid)                                # re-verification gets a sequence
+        self.assertEqual(run(self.cwd, "verify", tid, "--require")[0], 0)
+
+
+class TestExperimentOutcome(unittest.TestCase):
+    """Review 4 finding 2: two-stage classification, every (quality, cost) pair mapped."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "experiment_outcome.py")
+        spec = importlib.util.spec_from_file_location("experiment_outcome", path)
+        cls.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.m)
+
+    def test_quality_stage(self):
+        q = self.m.quality
+        self.assertEqual(q([(7, 5), (6, 5)], 7), "higher")
+        self.assertEqual(q([(5, 5), (6, 6)], 7), "equal")
+        self.assertEqual(q([(4, 5), (3, 6)], 7), "lower")
+        self.assertEqual(q([(7, 5), (4, 5)], 7), "inconsistent")
+        self.assertEqual(q([(6, 6), (7, 5)], 7), "inconsistent")   # equal once, higher once
+        self.assertEqual(q([(7, 7), (7, 7)], 7), "ceiling")
+        self.assertEqual(q([(7, 7), (6, 6)], 7), "equal")          # ceiling needs every repeat
+
+    def test_cost_stage_takes_the_worst_repeat(self):
+        c = self.m.cost
+        self.assertEqual(c([(70, 100), (80, 100)]), "improved")
+        self.assertEqual(c([(70, 100), (95, 100)]), "comparable")
+        self.assertEqual(c([(100, 100), (120, 100)]), "comparable")
+        self.assertEqual(c([(100, 100), (150, 100)]), "higher_within_budget")
+        self.assertEqual(c([(90, 100), (201, 100)]), "over_budget")
+        self.assertEqual(c([(200, 100), (200, 100)]), "higher_within_budget")   # 2.0x is within
+
+    def test_every_pair_has_exactly_one_outcome(self):
+        m = self.m
+        for qv in m.QUALITY:
+            for cv in m.COST:
+                self.assertIn(m.OUTCOME[(qv, cv)], m.OUTCOMES, (qv, cv))
+        self.assertEqual(len(m.OUTCOME), len(m.QUALITY) * len(m.COST))
+
+    def test_the_cases_the_review_named(self):
+        m = self.m
+        self.assertEqual(m.OUTCOME[("equal", "improved")], "efficiency_win")      # not Noise
+        self.assertEqual(m.OUTCOME[("equal", "comparable")], "tie")
+        self.assertEqual(m.OUTCOME[("equal", "higher_within_budget")], "cost_regression")
+        self.assertEqual(m.OUTCOME[("higher", "over_budget")], "mixed")
+        self.assertEqual(m.OUTCOME[("higher", "higher_within_budget")], "win")
+        self.assertEqual(m.OUTCOME[("ceiling", "improved")], "ceiling")
+        self.assertEqual(m.OUTCOME[("inconsistent", "improved")], "noise")
+        self.assertEqual(m.OUTCOME[("lower", "improved")], "loss")
+
+    def test_invalid_runs_are_excluded_before_classification(self):
+        r = self.m.classify([(7, 5), (6, 5)], [(100, 100), (110, 100)], 7, invalid=True)
+        self.assertEqual(r["outcome"], "invalid")
+        r = self.m.classify([(7, 7), (7, 7)], [(60, 100), (70, 100)], 7)
+        self.assertEqual((r["outcome"], r["cost"]), ("ceiling", "improved"))     # cost still reported
+
+
 if __name__ == "__main__":
     unittest.main()
