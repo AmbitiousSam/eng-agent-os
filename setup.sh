@@ -2,6 +2,7 @@
 # EAOS v4 bootstrap — install the Engineering Agentic OS on any machine, and clean up
 # what earlier versions installed. Idempotent; safe to re-run. Requires: Claude Code
 # (~/.claude), python3, git. Never wires hooks (opt in: scripts/install-eaos-hooks.sh).
+# `./setup.sh --dry-run` prints the cleanup plan and changes nothing.
 set -euo pipefail
 
 EAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,32 +29,77 @@ mkdir -p "$AGENTS_DIR" "$COMMANDS_DIR" "$CONFIG_DIR/templates" "$CONFIG_DIR/chec
          "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin"
 
 # ---------------------------------------------------------------------------------------
-# 1) CLEANUP of earlier EAOS versions (v1-v3). Everything removed here was installed by an
-#    earlier setup.sh and is superseded by v4; nothing project-local (.eaos/) is touched.
+# 1) CLEANUP of earlier EAOS versions (v1-v3), manifest-based (v4 review 1, finding 6).
+#    A file is REMOVED only if its content hash appears in install/legacy-manifest.sha256
+#    (the exact bytes an earlier setup.sh installed). A file at a legacy path whose content
+#    is not listed — customised, or never ours — is QUARANTINED (moved, with a manifest of
+#    what moved where), never deleted. `setup.sh --dry-run` prints the plan and changes
+#    nothing. Project-local .eaos/ directories are never touched.
 # ---------------------------------------------------------------------------------------
-removed=0
-rm_if() { for p in "$@"; do if [ -e "$p" ]; then rm -rf "$p"; removed=$((removed + 1)); fi; done; }
+MANIFEST="$EAOS_DIR/install/legacy-manifest.sha256"
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+QUAR="$CONFIG_DIR/quarantine/$(date +%Y%m%d-%H%M%S)"
+removed=0; quarantined=0
 
-# agency-agents persona library (280 files, every one listed on every turn of every session)
-for f in "$AGENTS_DIR"/agency-*.md "$AGENTS_DIR"/agency-*.md.bak; do rm_if "$f"; done
-# the 17 v3 personas
+sha_of() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
+listed() {  # listed <sha> <relative target path>
+  [ -f "$MANIFEST" ] && grep -q "^$1  $2\$" "$MANIFEST"
+}
+dispose() {  # dispose <absolute path> <relative target path used in the manifest>
+  local abs="$1" rel="$2"
+  [ -e "$abs" ] || return 0
+  if [ -f "$abs" ] && listed "$(sha_of "$abs")" "$rel"; then
+    if [ "$DRY_RUN" = 1 ]; then echo "  would remove   $abs (unmodified EAOS file)"; else rm -f "$abs"; fi
+    removed=$((removed + 1))
+  elif [ -f "$abs" ] && [ "${abs%.bak}" != "$abs" ] && listed "$(sha_of "$abs")" "${rel%.bak}"; then
+    # a .bak created by an earlier install_file whose content is an EAOS original
+    if [ "$DRY_RUN" = 1 ]; then echo "  would remove   $abs (EAOS backup)"; else rm -f "$abs"; fi
+    removed=$((removed + 1))
+  else
+    if [ "$DRY_RUN" = 1 ]; then echo "  would quarantine $abs (content not in manifest: customised or not ours)"; else
+      mkdir -p "$QUAR/$(dirname "$rel")"; mv "$abs" "$QUAR/$rel"; echo "$rel" >> "$QUAR/MANIFEST.txt"; fi
+    quarantined=$((quarantined + 1))
+  fi
+}
+dispose_dir() {  # dispose_dir <abs dir> <rel dir>: remove only if EVERY file inside is listed
+  local abs="$1" rel="$2" f all=1
+  [ -d "$abs" ] || return 0
+  while IFS= read -r -d '' f; do
+    listed "$(sha_of "$f")" "$rel/${f#"$abs"/}" || { all=0; break; }
+  done < <(find "$abs" -type f -print0)
+  if [ "$all" = 1 ]; then
+    if [ "$DRY_RUN" = 1 ]; then echo "  would remove   $abs/ (all files unmodified EAOS)"; else rm -rf "$abs"; fi
+    removed=$((removed + 1))
+  else
+    if [ "$DRY_RUN" = 1 ]; then echo "  would quarantine $abs/ (contains files not in manifest)"; else
+      mkdir -p "$QUAR/$(dirname "$rel")"; mv "$abs" "$QUAR/$rel"; echo "$rel/" >> "$QUAR/MANIFEST.txt"; fi
+    quarantined=$((quarantined + 1))
+  fi
+}
+
+[ "$DRY_RUN" = 1 ] && say "DRY RUN — cleanup plan for earlier EAOS versions:"
+for f in "$AGENTS_DIR"/agency-*.md "$AGENTS_DIR"/agency-*.md.bak; do [ -e "$f" ] && dispose "$f" "agents/$(basename "$f")"; done
 for a in architect ceo-strategist code-reviewer codebase-analyst developer devops-engineer \
          finance-analyst growth-lead incident-commander platform-engineer product-manager \
          qa-engineer requirements-analyst security-reviewer sre-observability tech-writer verifier; do
-  rm_if "$AGENTS_DIR/$a.md" "$AGENTS_DIR/$a.md.bak"
+  dispose "$AGENTS_DIR/$a.md" "agents/$a.md"; dispose "$AGENTS_DIR/$a.md.bak" "agents/$a.md.bak"
 done
-# v1-v3 commands
-for c in agent-os.md incident.md triage.md; do rm_if "$COMMANDS_DIR/$c" "$COMMANDS_DIR/$c.bak"; done
-# v3 orchestration files and stores
-rm_if "$CONFIG_DIR/protocol.md" "$CONFIG_DIR/loop.md" "$CONFIG_DIR/orchestrator.md" \
-      "$CONFIG_DIR/playbooks" "$CONFIG_DIR/memory-seed" "$CONFIG_DIR/skill-backups" \
-      "$CONFIG_DIR/protocol.md.bak" "$CONFIG_DIR/loop.md.bak" "$CONFIG_DIR/orchestrator.md.bak"
-# the 11 v3 skills (role knowledge now lives in checklists/)
+for c in agent-os.md incident.md triage.md; do dispose "$COMMANDS_DIR/$c" "commands/$c"; dispose "$COMMANDS_DIR/$c.bak" "commands/$c.bak"; done
+for f in protocol.md loop.md orchestrator.md; do dispose "$CONFIG_DIR/$f" "eaos/$f"; dispose "$CONFIG_DIR/$f.bak" "eaos/$f.bak"; done
+dispose_dir "$CONFIG_DIR/playbooks" "eaos/playbooks"
+dispose_dir "$CONFIG_DIR/memory-seed" "eaos/memory-seed"
+# skill-backups only ever held copies of our own skills; quarantine rather than judge
+[ -d "$CONFIG_DIR/skill-backups" ] && dispose_dir "$CONFIG_DIR/skill-backups" "eaos/skill-backups"
 for s in bug-triage codebase-map deployment-guide design-review fitness-functions \
          incident-response memory-consolidation requirement-intake sensor-feedback test-plan triage; do
-  rm_if "$SKILLS_DIR/$s"
+  dispose_dir "$SKILLS_DIR/$s" "skills/$s"
 done
-[ "$removed" -gt 0 ] && say "Cleaned up $removed item(s) from earlier EAOS versions."
+if [ "$DRY_RUN" = 1 ]; then
+  say "Dry run: $removed removal(s), $quarantined quarantine(s). Nothing changed."; exit 0
+fi
+[ "$removed" -gt 0 ] && say "Removed $removed unmodified EAOS item(s) from earlier versions."
+[ "$quarantined" -gt 0 ] && say "Quarantined $quarantined item(s) (not verifiably ours) -> $QUAR (see MANIFEST.txt)"
 
 # ---------------------------------------------------------------------------------------
 # 2) INSTALL v4

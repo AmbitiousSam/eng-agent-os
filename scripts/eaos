@@ -1404,6 +1404,35 @@ def require_status(state):
             return False
         return v["seq"] > int(r.get("seq", 0) or 0)
     open_risks = [r["msg"] for r in state.get("open_risks", []) if not answered(r)]
+    # v4 review 1, finding 3: the new runtime state must reach the completion authority.
+    units = state.get("units", {}) or {}
+    unfinished = [f"{u['id']} is {u['status'].upper()}"
+                  + (f" ({(u.get('handoff') or {}).get('reason')})" if u.get('status') == 'blocked' else "")
+                  for u in units.values() if u.get("status") in ("active", "stale", "blocked")]
+    if unfinished:
+        return (False, "unit(s) not finished: " + "; ".join(unfinished) +
+                " — hand each off as READY, or `eaos unit cancel --reason` if it is out of "
+                "scope", [], [])
+    waived = []
+    live_builds = [u for u in units.values()
+                   if u.get("kind") == "build" and u.get("status") != "cancelled"]
+    if live_builds:
+        cfg = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+        current = compute_snapshot(cfg)
+        for cat in cfg.get("required_checks", []):
+            status, rec = evidence_status(state, cat, current)
+            if status != "pass":
+                waived_here = any(cat in (u.get("handoff") or {}).get("waived", [])
+                                  for u in units.values() if u.get("status") == "ready")
+                if waived_here:
+                    continue   # surfaced as CONDITIONAL below
+                return (False, f"required '{cat}' evidence is {status} for the current code "
+                        f"(snapshot {snapshot_short(current)}) — evidence recorded against "
+                        f"earlier code is void; re-run `eaos check`", [], [])
+        waived = [f"{u['id']}:{','.join(u['handoff']['waived'])} waived — "
+                  f"{u['handoff'].get('waive_reason')}"
+                  for u in units.values()
+                  if u.get("status") == "ready" and (u.get("handoff") or {}).get("waived")]
     if open_risks:
         return (False, "high RISK(s) without a verdict: " + ", ".join(open_risks) +
                 " — test each (verify --criterion R-<msg> --verdict verified|failed) or "
@@ -1411,6 +1440,7 @@ def require_status(state):
                 "a verdict", [], [])
     manual = [k for k, v in criteria.items() if v["verdict"] == MANUAL_CONFIRMATION_VERDICT]
     unresolved = [k for k, v in criteria.items() if v["verdict"] in UNRESOLVED_VERDICTS]
+    manual = manual + waived      # a waived required check is a conditional outcome, never a pass
     return True, None, manual, unresolved
 
 def print_criteria_table(state):
@@ -1454,8 +1484,12 @@ def cmd_verify(args):
             # fix 2: name which class each conditional criterion belongs to — the two
             # classes carry different honesty semantics, never collapse them together.
             for k in manual:
-                print(f"CONDITIONAL: {k} (manual_confirmation_required) — implementation "
-                      f"may be complete; release pending human confirmation")
+                if k in state.get("criteria", {}):
+                    print(f"CONDITIONAL: {k} (manual_confirmation_required) — implementation "
+                          f"may be complete; release pending human confirmation")
+                else:
+                    print(f"CONDITIONAL: {k} — a required check was waived at handoff; "
+                          f"not a verified outcome")
             for k in unresolved:
                 verdict = state["criteria"][k]["verdict"]
                 print(f"CONDITIONAL: {k} ({verdict}) — implementation NOT claimed "
@@ -2229,18 +2263,40 @@ def compute_snapshot(cfg=None):
     outputs, caches). Ignored-but-relevant paths are opted in via config
     snapshot_extra_paths. Not a git repo -> hashes the tree the same way with HEAD='nogit'."""
     h = hashlib.sha256()
-    head = (_git("rev-parse", "HEAD") or "nogit").strip()
-    h.update(head.encode())
-    diff = _git("diff", "HEAD", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS])
-    if diff is None:
-        diff = _git("diff", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS]) or ""
-    h.update(diff.encode("utf-8", "surrogatepass"))
-    untracked = _git("ls-files", "--others", "--exclude-standard") or ""
     ignore = (cfg or {}).get("snapshot_ignore_globs") or DEFAULT_CONFIG["snapshot_ignore_globs"]
 
     def noise(p):
         parts = p.split("/")
         return any(fnmatch.fnmatch(part, g) for part in parts for g in ignore)
+
+    head = _git("rev-parse", "HEAD")
+    if head is None or _git("rev-parse", "--is-inside-work-tree") is None:
+        # Not a git repository (v4 review 1, finding 4): a deterministic walk of the tree,
+        # same exclusions, so an edit to any product file changes the identity. Slower
+        # than the git path, and stated as such in the adapter table.
+        h.update(b"nogit-tree\n")
+        for root, dirs, files in os.walk(os.getcwd()):
+            rel_root = os.path.relpath(root, os.getcwd())
+            dirs[:] = sorted(d for d in dirs
+                             if d not in SNAPSHOT_EXCLUDE_DIRS and d != ".git" and not noise(d))
+            for name in sorted(files):
+                rel = name if rel_root == "." else os.path.join(rel_root, name)
+                if noise(rel):
+                    continue
+                h.update(f"\n--{rel}--\n".encode("utf-8", "surrogatepass"))
+                try:
+                    with open(os.path.join(root, name), "rb") as f:
+                        h.update(f.read())
+                except OSError:
+                    h.update(b"<unreadable>")
+        return h.hexdigest()
+
+    h.update(head.strip().encode())
+    diff = _git("diff", "HEAD", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS])
+    if diff is None:
+        diff = _git("diff", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS]) or ""
+    h.update(diff.encode("utf-8", "surrogatepass"))
+    untracked = _git("ls-files", "--others", "--exclude-standard") or ""
     paths = [p for p in untracked.splitlines()
              if p and not any(p == d or p.startswith(d + "/") for d in SNAPSHOT_EXCLUDE_DIRS)
              and not noise(p)]
@@ -2349,20 +2405,34 @@ def cmd_check(args):
           f"snapshot={snapshot_short(rec['snapshot_before'])} log={rec['output_ref']}")
     sys.exit(0 if passed else 1)
 
-def valid_evidence(state, category, current_snapshot):
-    """R-2/R-3: passing, stable, and bound to the CURRENT snapshot (any change invalidates
-    all evidence); or an explicit unavailable record made against the current snapshot."""
+def latest_evidence(state, category, current_snapshot):
+    """The LATEST record of this category made against the current snapshot, whatever its
+    result (v4 review 1, finding 2: searching backwards for any historical pass let a
+    newer failure be ignored). Records against other snapshots are void (R-3)."""
     for rec in reversed(state.get("checks", [])):
         if rec.get("category") != category:
             continue
-        if rec.get("unavailable"):
-            if rec.get("snapshot_before") == current_snapshot:
-                return rec
-            continue
-        if (rec.get("exit") == 0 and rec.get("stable")
-                and rec.get("snapshot_after") == current_snapshot):
+        bound = rec.get("snapshot_after") if not rec.get("unavailable") else rec.get("snapshot_before")
+        if bound == current_snapshot:
             return rec
     return None
+
+def evidence_status(state, category, current_snapshot):
+    """-> ("pass", rec) | ("fail", rec) | ("unavailable", rec) | ("unstable", rec) | ("none", None).
+    Only "pass" satisfies a required check. An unavailable record explains a BLOCKED or
+    waived handoff; it never counts as passing (finding 1)."""
+    rec = latest_evidence(state, category, current_snapshot)
+    if rec is None:
+        return "none", None
+    if rec.get("unavailable"):
+        return "unavailable", rec
+    if not rec.get("stable"):
+        return "unstable", rec
+    return ("pass" if rec.get("exit") == 0 else "fail"), rec
+
+def valid_evidence(state, category, current_snapshot):
+    status, rec = evidence_status(state, category, current_snapshot)
+    return rec if status == "pass" else None
 
 # ---- units (P-1, P-4, R-4)
 
@@ -2395,6 +2465,17 @@ def cmd_unit(args):
         u = units.get(args.uid)
         if not u:
             die(f"no such unit: {args.uid}", 2)
+        if args.unit_cmd == "cancel":
+            if not args.reason:
+                die("unit cancel: --reason is required (an explicit, auditable disposition)", 2)
+            u["status"] = "cancelled"
+            u["handoff"] = {"kind": "cancelled", "reason": args.reason, "at": ts,
+                            "seq": next_seq(state)}
+            save_state(args.id, state)
+            release_workspace_writer(args.id, args.uid)
+            warroom_log(args.id, f"[{ts}] UNIT CANCEL {args.uid}: {args.reason}")
+            print(f"OK: {args.uid} cancelled ({args.reason})")
+            sys.exit(0)
         if args.unit_cmd == "handoff":
             if bool(args.ready) == bool(args.blocked):
                 die("unit handoff: need exactly one of --ready or --blocked --reason", 2)
@@ -2405,6 +2486,7 @@ def cmd_unit(args):
                 u["handoff"] = {"kind": "blocked", "reason": args.reason, "at": ts,
                                 "seq": next_seq(state)}
                 save_state(args.id, state)
+                release_workspace_writer(args.id, args.uid)   # a blocked holder keeps no pen
                 warroom_log(args.id, f"[{ts}] UNIT HANDOFF {args.uid} BLOCKED: {args.reason}")
                 print(f"OK: {args.uid} handed off as BLOCKED (requesting help) — this is not a "
                       f"success claim")
@@ -2415,13 +2497,26 @@ def cmd_unit(args):
                 problems.append(f"unit is STALE (invalidated by {u.get('stale_by')}); "
                                 f"reconcile it first")
             current = compute_snapshot(cfg)
+            waived = []
             for cat in cfg.get("required_checks", []):
                 if u.get("kind") != "build":
                     break
-                if not valid_evidence(state, cat, current):
-                    problems.append(f"no valid '{cat}' evidence for snapshot "
-                                    f"{snapshot_short(current)} (passing, stable, bound to "
-                                    f"the current code; or an explicit --unavailable record)")
+                status, rec = evidence_status(state, cat, current)
+                if status == "pass":
+                    continue
+                if cat in _split_scope(args.waive):
+                    if not args.reason:
+                        die("unit handoff: --waive requires --reason", 2)
+                    waived.append(cat)
+                    continue
+                detail = {"none": "no check recorded against the current code",
+                          "fail": f"the latest '{cat}' check FAILED (exit {rec.get('exit') if rec else '?'})",
+                          "unavailable": f"'{cat}' is recorded UNAVAILABLE ({rec.get('reason') if rec else ''}) — "
+                                         f"that explains a --blocked handoff or an explicit "
+                                         f"--waive {cat} --reason, it is not a pass",
+                          "unstable": f"the latest '{cat}' check changed product files"}[status]
+                problems.append(f"required '{cat}' evidence for snapshot "
+                                f"{snapshot_short(current)}: {detail}")
             pending = unreconciled_entries(state, u)
             if pending:
                 problems.append("unreconciled in-scope board changes since this unit "
@@ -2435,14 +2530,15 @@ def cmd_unit(args):
                 sys.exit(1)
             u["status"] = "ready"
             u["handoff"] = {"kind": "ready", "at": ts, "snapshot": current,
-                            "seq": next_seq(state)}
-            w = state.get("writer")
-            if w and w.get("unit") == args.uid:
-                state["writer"] = None
+                            "seq": next_seq(state), "waived": waived,
+                            "waive_reason": args.reason if waived else None}
             save_state(args.id, state)
+            release_workspace_writer(args.id, args.uid)
             warroom_log(args.id, f"[{ts}] UNIT HANDOFF {args.uid} READY snapshot="
-                                  f"{snapshot_short(current)}")
-            print(f"OK: {args.uid} READY for review at snapshot {snapshot_short(current)}")
+                                  f"{snapshot_short(current)}"
+                                  + (f" WAIVED={waived} reason={args.reason}" if waived else ""))
+            print(f"OK: {args.uid} READY for review at snapshot {snapshot_short(current)}"
+                  + (f" — WAIVED {waived} (auditable; completion will be CONDITIONAL)" if waived else ""))
             sys.exit(0)
 
 def unreconciled_entries(state, unit):
@@ -2652,36 +2748,92 @@ def print_board_view(state, cfg, args):
         print(f"({omitted_other} more entries not shown; raise --budget or narrow --scope)")
     return rc
 
-# ---- writer lease (R-5)
+# ---- writer lease (R-5) — WORKSPACE scope: .eaos/writer.json under the project lock.
+# v4 review 1, finding 5: a per-task field let two tasks in one directory both hold "the"
+# pen. The owner is (task, unit). A blocked, cancelled or ready handoff releases it;
+# an abandoned holder is released with --force --reason, which is logged to both tasks.
+
+def writer_path():
+    return os.path.join(eaos_dir(), "writer.json")
+
+def read_writer():
+    p = writer_path()
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f) or None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+def write_writer(obj):
+    p = writer_path()
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp, p)
+
+def release_workspace_writer(task_id, unit_id):
+    """Called by handoff/cancel while the TASK lock is held; takes the project lock for the
+    workspace file. Lock order project->task is the canonical one, so this helper is only
+    used from paths that already hold no other task's lock and can safely nest by taking
+    the project lock AFTER the caller has released its own state write."""
+    with project_lock():
+        w = read_writer()
+        if w and w.get("task") == task_id and w.get("unit") == unit_id:
+            try:
+                os.remove(writer_path())
+            except OSError:
+                pass
 
 def cmd_writer(args):
-    with task_lock(args.id):
-        state = load_state(args.id)
-        w = state.get("writer")
-        ts = now_iso()
+    ts = now_iso()
+    with project_lock():
+        w = read_writer()
         if args.writer_cmd == "claim":
-            if args.unit not in units_of(state):
-                die(f"no such unit: {args.unit}", 2)
-            if w and w.get("unit") != args.unit:
-                print(f"WRITER HELD by {w['unit']} since {w['at']} (scope {w.get('scope')}) — "
-                      f"one writer per workspace; wait for its handoff or work read-only")
-                sys.exit(1)
-            state["writer"] = {"unit": args.unit, "at": ts, "seq": next_seq(state),
-                               "scope": _split_scope(args.scope)}
-            save_state(args.id, state)
-            warroom_log(args.id, f"[{ts}] WRITER {args.unit} claimed scope="
-                                  f"{state['writer']['scope']}")
-            print(f"OK: writer lease -> {args.unit}")
+            with task_lock(args.id):
+                state = load_state(args.id)
+                if args.unit not in units_of(state):
+                    die(f"no such unit: {args.unit}", 2)
+                if w and (w.get("task"), w.get("unit")) != (args.id, args.unit):
+                    print(f"WRITER HELD by {w['task']}/{w['unit']} since {w['at']} "
+                          f"(scope {w.get('scope')}) — one writer per workspace; wait for its "
+                          f"handoff, or `eaos writer release {w['task']} --unit {w['unit']} "
+                          f"--force --reason '<why>'` if it is abandoned")
+                    sys.exit(1)
+                lease = {"task": args.id, "unit": args.unit, "at": ts,
+                         "seq": next_seq(state), "scope": _split_scope(args.scope),
+                         "cwd": os.getcwd()}
+                write_writer(lease)
+                state["writer"] = {"unit": args.unit, "at": ts, "scope": lease["scope"]}
+                save_state(args.id, state)
+                warroom_log(args.id, f"[{ts}] WRITER {args.unit} claimed workspace "
+                                      f"scope={lease['scope']}")
+            print(f"OK: writer lease -> {args.id}/{args.unit}")
             sys.exit(0)
         if args.writer_cmd == "release":
-            if not w or w.get("unit") != args.unit:
-                die(f"writer release: lease not held by {args.unit}", 1)
-            state["writer"] = None
-            save_state(args.id, state)
-            warroom_log(args.id, f"[{ts}] WRITER {args.unit} released")
-            print(f"OK: writer lease released by {args.unit}")
+            if not w:
+                die("writer release: no lease is held", 1)
+            holder = (w.get("task"), w.get("unit"))
+            if holder != (args.id, args.unit) and not args.force:
+                die(f"writer release: lease held by {holder[0]}/{holder[1]}, not "
+                    f"{args.id}/{args.unit} — use --force --reason to recover an abandoned "
+                    f"lease", 1)
+            if args.force and not args.reason:
+                die("writer release: --force requires --reason", 2)
+            try:
+                os.remove(writer_path())
+            except OSError:
+                pass
+            for tid in {holder[0], args.id}:
+                if tid and os.path.isdir(os.path.join(eaos_dir(), tid)):
+                    warroom_log(tid, f"[{ts}] WRITER {holder[0]}/{holder[1]} released"
+                                     + (f" by FORCE from {args.id}/{args.unit}: {args.reason}"
+                                        if args.force else ""))
+            print(f"OK: writer lease released ({holder[0]}/{holder[1]})"
+                  + (" by force" if args.force else ""))
             sys.exit(0)
-        print(f"writer: {w['unit'] if w else '(none)'}")
+        print(f"writer: {w['task'] + '/' + w['unit'] if w else '(none)'}")
         sys.exit(0)
 
 # ---- context record (C-4, advisory)
@@ -2727,8 +2879,8 @@ def print_packet(task_id, state, cfg):
         print("units:")
         for u in live[:8]:
             print(f"  {u['id']} {u['status']} {u['kind']} scope={u.get('scope')} :: {u['title']}")
-    w = state.get("writer")
-    print(f"writer: {w['unit'] if w else '(none)'}")
+    w = read_writer()
+    print(f"writer: {w['task'] + '/' + w['unit'] if w else '(none)'}")
     class A:  # minimal args shim for the lead view
         for_ = "lead"; budget = int(cfg.get("board_view_budget", {}).get("packet", 800))
         scope = None; unit = None
@@ -2929,7 +3081,15 @@ def build_parser():
     p_uh.add_argument("--ready", action="store_true")
     p_uh.add_argument("--blocked", action="store_true")
     p_uh.add_argument("--reason", default=None)
+    p_uh.add_argument("--waive", default=None,
+                      help="comma-separated required check categories to waive for THIS "
+                           "handoff; needs --reason; auditable; completion becomes CONDITIONAL")
     p_uh.set_defaults(func=cmd_unit)
+    p_uc = unit_sub.add_parser("cancel")
+    p_uc.add_argument("id")
+    p_uc.add_argument("uid")
+    p_uc.add_argument("--reason", default=None)
+    p_uc.set_defaults(func=cmd_unit)
 
     p_board = sub.add_parser("board")
     board_sub = p_board.add_subparsers(dest="board_cmd", required=True)
@@ -2980,6 +3140,9 @@ def build_parser():
         if name != "show":
             sp.add_argument("--unit", required=True)
         sp.add_argument("--scope", default=None)
+        if name == "release":
+            sp.add_argument("--force", action="store_true")
+            sp.add_argument("--reason", default=None)
         sp.set_defaults(func=cmd_writer)
 
     p_ctx = sub.add_parser("ctx")

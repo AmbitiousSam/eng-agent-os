@@ -8,7 +8,10 @@ setup.sh cleans up v1-v3 installs (280 agency-agents, 17 personas, skills, playb
 rewritten for the v4 layout. v3 preserved at tag `e0-baseline` for E0. Spec DRAFT rev 2 with an
 implementation note; freeze needs E0/E1 outcomes + tests per contract.
 
-**Position:** build -> gates -> commit/push -> install -> real runs under v4 -> review rounds.
+**Position:** v4 review round 1 (871d3d0) answered: 6 findings reproduced + fixed (unavailable != ready,
+latest check decides, completion consumes units + void evidence, non-git tree hash, workspace
+writer lease, manifest-based installer cleanup with quarantine + --dry-run), E0 isolated env
+script. Next: reviewer re-probe -> real runs under v4 -> review rounds.
 E0 (pre-registered, evals/results/2026-09-17-E0-preregistration.md) runs against the tag.
 Hidden checks for E0 live OUTSIDE the repo: ~/.eaos-holdouts/E0/hidden-checks.md (sha256 in the
 pre-registration). Grading harness not yet written.

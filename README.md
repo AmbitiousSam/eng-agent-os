@@ -28,8 +28,11 @@ git clone https://github.com/AmbitiousSam/eng-agent-os.git && cd eng-agent-os
 ./scripts/eaos-doctor.sh         # verify
 ```
 
-`setup.sh` also removes what earlier EAOS versions installed (personas, the agency-agents
-library, skills, playbooks). Restart Claude Code, then from inside any project:
+`setup.sh` also cleans up what earlier EAOS versions installed (personas, the agency-agents
+library, skills, playbooks): a file is removed only if its content matches the manifest of
+what EAOS shipped (`install/legacy-manifest.sha256`); anything customised or unknown is
+quarantined under `~/.claude/eaos/quarantine/` with a manifest. `./setup.sh --dry-run`
+prints the plan first. Restart Claude Code, then from inside any project:
 
 ```
 /agentic-os Add per-API-key rate limiting to our public REST API

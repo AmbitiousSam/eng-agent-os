@@ -23,13 +23,14 @@ eval: ## Schema-validate the routing eval fixture (evals/routing-golden.yaml)
 test: ## Syntax-check shell scripts + run the validator + the eval-fixture check
 	@for s in setup.sh scripts/eaos-doctor.sh scripts/push-to-github.sh scripts/install-hooks.sh \
 	          scripts/eaos-hook.sh scripts/install-eaos-hooks.sh scripts/test_eaos_hooks.sh \
-	          scripts/e0_packet.sh \
+	          scripts/e0_packet.sh scripts/e0_env.sh scripts/test_setup_cleanup.sh \
 	          .githooks/pre-push; do \
 	  bash -n "$$s" && echo "$$s: syntax OK"; done
 	@python3 scripts/validate-eaos.py
 	@python3 scripts/eval_check.py
 	@python3 scripts/test_eaos.py
 	@bash scripts/test_eaos_hooks.sh
+	@bash scripts/test_setup_cleanup.sh
 
 check: test ## Alias for test (CI entrypoint)
 

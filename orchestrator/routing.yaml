@@ -55,6 +55,8 @@ adapters:
     stop_time_audit: enforced             # Stop hook -> eaos audit (fail-open on infra)
     writer_lease: advisory                # runtime lease; edits are not gated
     context_ceiling: measured             # Stop hook -> eaos ctx; cannot force a reset
-    check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff
+    check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff + verify --require
+    bootstrap_loaded_once: advisory       # the command says not to re-run it; nothing prevents expansion
+    unit_state_reaches_completion: enforced      # blocked/stale/active units and void evidence refuse --require
   cursor: {fresh_context_unit: manual, everything_else: advisory}
   codex: {fresh_context_unit: manual, everything_else: advisory}

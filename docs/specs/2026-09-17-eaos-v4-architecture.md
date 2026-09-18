@@ -86,6 +86,19 @@ and coordination overhead are confounds E0 controls. Nothing here is proven unti
 | Freeze trigger inconsistent | One rule, in the header |
 | Measurements unverified | Artifact and script linked in section 2 |
 
+### 3.2 Review of the shipped implementation (871d3d0), all reproduced and fixed
+
+| Finding | Fix (tests in suite) |
+|---|---|
+| Unavailable evidence satisfied READY | Only a passing latest check satisfies a required category. Unavailable explains `--blocked`, or an explicit `--waive <cat> --reason` that is logged and makes completion CONDITIONAL, never verified |
+| A newer failing check was ignored behind an older pass | The latest record of a category at the current snapshot decides; a failure blocks READY |
+| Blocked units did not reach the verdict | `require_status` (used by verify, report, episode close) refuses while any unit is active, stale or blocked, and when required evidence is not passing at the current code; `unit cancel --reason` is the explicit disposition |
+| Non-git snapshot hashed a constant | Deterministic tree walk with the same exclusions; edits change the identity |
+| Writer lease was per task | `.eaos/writer.json` under the project lock; owner is (task, unit); blocked, ready and cancel release it; `--force --reason` recovers an abandoned holder, logged to both tasks |
+| Installer deleted by filename | Manifest of content hashes of everything v1-v3 installed (`install/legacy-manifest.sha256`); unmodified EAOS files are removed, anything else is quarantined with a manifest; `setup.sh --dry-run` |
+| E0 environment | `scripts/e0_env.sh`: isolated v3 install from the tag in a separate `CLAUDE_CONFIG_DIR` |
+| "Loaded once" is a prompt instruction | Recorded as **advisory** in the adapter table |
+
 ## 4. Shape
 
 ```

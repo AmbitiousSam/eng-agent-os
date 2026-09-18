@@ -2274,7 +2274,7 @@ class TestCheckEvidence(V4Case):
         u = self.unit()
         rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
         self.assertEqual(rc, 1)
-        self.assertIn("no valid 'test' evidence", out)
+        self.assertIn("no check recorded against the current code", out)
         rc, out, err = run(self.cwd, "check", self.tid, "--category", "test",
                            "--cmd", "python3 -c 'import sys; sys.exit(0)'", "--unit", u)
         self.assertEqual(rc, 0, out + err)
@@ -2301,7 +2301,7 @@ class TestCheckEvidence(V4Case):
         self.edit()
         rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
         self.assertEqual(rc, 1)
-        self.assertIn("no valid 'test' evidence", out)
+        self.assertIn("no check recorded against the current code", out)
 
     def test_check_that_mutates_product_files_is_unstable(self):
         rc, out, err = run(self.cwd, "check", self.tid, "--category", "lint",
@@ -2309,13 +2309,44 @@ class TestCheckEvidence(V4Case):
         self.assertEqual(rc, 1)
         self.assertIn("SNAPSHOT-UNSTABLE", out)
 
-    def test_explicit_unavailable_counts_with_reason(self):
+    def test_unavailable_never_satisfies_ready(self):
+        """v4 review 1, finding 1: unavailable explains BLOCKED or an auditable waiver."""
         u = self.unit()
         rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--unavailable")
         self.assertEqual(rc, 2)
         rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--unavailable",
                            "--reason", "no test suite exists in this repository")
         self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 1)
+        self.assertIn("UNAVAILABLE", out)
+        self.assertIn("not a pass", out)
+        # explicit, auditable waiver: allowed, and completion becomes CONDITIONAL
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready", "--waive", "test")
+        self.assertEqual(rc, 2)                                         # needs --reason
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready", "--waive", "test",
+                           "--reason", "repo has no suite; checker will exercise manually")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WAIVED", out)
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "manual exercise")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 3)
+        self.assertIn("waived", out)
+        run(self.cwd, "phase", self.tid, "DONE")
+        run(self.cwd, "episode", "close", self.tid)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            self.assertEqual(json.loads(f.readlines()[-1])["verdict"], "conditional-manual")
+
+    def test_latest_result_decides_a_newer_failure_blocks(self):
+        """v4 review 1, finding 2."""
+        u = self.unit()
+        self.assertEqual(run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")[0], 0)
+        self.assertEqual(run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "false")[0], 1)
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 1)
+        self.assertIn("FAILED", out)
+        self.assertEqual(run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")[0], 0)
         self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
 
     def test_read_units_need_no_evidence(self):
@@ -2427,6 +2458,108 @@ class TestWriterLease(V4Case):
         run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
         self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u1, "--ready")[0], 0)
         self.assertEqual(run(self.cwd, "writer", "claim", self.tid, "--unit", u2)[0], 0)
+
+    def test_lease_is_per_workspace_across_tasks(self):
+        """v4 review 1, finding 5: two tasks in one directory share one pen."""
+        u1 = self.unit("a")
+        self.assertEqual(run(self.cwd, "writer", "claim", self.tid, "--unit", u1)[0], 0)
+        t2 = self.new_task("second task")
+        rc, out, err = run(self.cwd, "unit", "start", t2, "--title", "b", "--kind", "build")
+        u2 = out.strip()
+        rc, out, err = run(self.cwd, "writer", "claim", t2, "--unit", u2)
+        self.assertEqual(rc, 1)
+        self.assertIn(f"{self.tid}/{u1}", out)
+        self.assertTrue(os.path.exists(os.path.join(self.cwd, ".eaos", "writer.json")))
+        # blocked handoff releases the pen
+        run(self.cwd, "unit", "handoff", self.tid, u1, "--blocked", "--reason", "stuck")
+        self.assertEqual(run(self.cwd, "writer", "claim", t2, "--unit", u2)[0], 0)
+        # abandoned holder: only --force --reason recovers it, logged to both tasks
+        rc, out, err = run(self.cwd, "writer", "release", self.tid, "--unit", u1)
+        self.assertEqual(rc, 1)
+        rc, out, err = run(self.cwd, "writer", "release", self.tid, "--unit", u1, "--force")
+        self.assertEqual(rc, 2)
+        rc, out, err = run(self.cwd, "writer", "release", self.tid, "--unit", u1, "--force",
+                           "--reason", "holder session died")
+        self.assertEqual(rc, 0, err)
+        with open(os.path.join(self.cwd, ".eaos", t2, "warroom.md")) as f:
+            self.assertIn("FORCE", f.read())
+
+
+class TestCompletionConsumesUnits(V4Case):
+    """v4 review 1, finding 3: blocked, stale or active units and void evidence block a
+    verified outcome; cancel is the explicit disposition."""
+
+    def verified_ac(self):
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "green")
+
+    def episode_verdict(self):
+        run(self.cwd, "phase", self.tid, "DONE")
+        run(self.cwd, "episode", "close", self.tid)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            return json.loads(f.readlines()[-1])["verdict"]
+
+    def test_blocked_unit_blocks_completion_until_cancelled_or_ready(self):
+        u = self.unit()
+        self.verified_ac()
+        run(self.cwd, "unit", "handoff", self.tid, u, "--blocked", "--reason", "cannot run tests")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED", out)
+        self.assertEqual(run(self.cwd, "report", self.tid)[0], 1)
+        rc, out, err = run(self.cwd, "unit", "cancel", self.tid, u)
+        self.assertEqual(rc, 2)                                         # reason required
+        rc, out, err = run(self.cwd, "unit", "cancel", self.tid, u, "--reason", "out of scope")
+        self.assertEqual(rc, 0, err)
+        # no build unit remains -> criteria decide
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 0)
+
+    def test_blocked_build_closes_unverified(self):
+        u = self.unit()
+        self.verified_ac()
+        run(self.cwd, "unit", "handoff", self.tid, u, "--blocked", "--reason", "cannot run tests")
+        self.assertEqual(self.episode_verdict(), "unverified")
+
+    def test_evidence_void_after_edit_blocks_completion(self):
+        u = self.unit()
+        self.verified_ac()
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 0)
+        self.edit()                                                     # code changed after handoff
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("void", out)
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 0)
+
+    def test_stale_unit_blocks_completion(self):
+        u = self.unit()
+        self.verified_ac()
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        r = self.unit("research", kind="read")
+        run(self.cwd, "board", "post", self.tid, "--type", "finding", "--summary", "ledger differs",
+            "--unit", r, "--invalidates", u)
+        run(self.cwd, "unit", "handoff", self.tid, r, "--ready")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", out)
+
+
+class TestNoGitSnapshot(EaosTestCase):
+    def test_tree_hash_changes_with_product_edits(self):
+        """v4 review 1, finding 4: outside git the snapshot must still track product files."""
+        self.init()
+        with open(os.path.join(self.cwd, "app.py"), "w") as f:
+            f.write("before\n")
+        a = run(self.cwd, "snapshot")[1].strip()
+        with open(os.path.join(self.cwd, "app.py"), "w") as f:
+            f.write("after\n")
+        b = run(self.cwd, "snapshot")[1].strip()
+        self.assertNotEqual(a, b)
+        self.assertEqual(run(self.cwd, "snapshot")[1].strip(), b)          # deterministic
+        run(self.cwd, "task", "new", "x")                                   # .eaos/ changes
+        self.assertEqual(run(self.cwd, "snapshot")[1].strip(), b)          # excluded
 
 
 class TestPacketAndContext(V4Case):

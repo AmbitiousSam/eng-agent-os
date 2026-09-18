@@ -69,6 +69,15 @@ or reveal user-owned data use the existing `login_required`; schema changes go i
 Later units depend on earlier decisions and on constraints stated once, eight messages
 earlier. That is the property under test.
 
+## Environment isolation
+
+The baseline tag preserves v3's source, not the environment: the global `~/.claude` now
+holds v4. E0 therefore runs from a separate Claude Code config directory built by
+`scripts/e0_env.sh` (a worktree at `e0-baseline`, installed with `CLAUDE_HOME=~/.claude-e0`,
+hooks wired there), and every session is started with `CLAUDE_CONFIG_DIR=~/.claude-e0`.
+Whether that variable is honoured must be confirmed on the machine before run 1 and
+recorded; the run log records the worktree commit and `claude --version`.
+
 ## Controls
 
 Same in every run, and **verified from the transcript, not from configuration**: model and
