@@ -11,6 +11,7 @@ bad() { fail_count=$((fail_count + 1)); printf "  \033[0;31mFAIL\033[0m - %s\n" 
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi; }
 
 HOME_T="$(mktemp -d)"; export CLAUDE_HOME="$HOME_T"
+export AGENTS_SKILLS_HOME="$HOME_T/agents-skills"   # never touch the real ~/.agents in a test
 mkdir -p "$HOME_T/agents" "$HOME_T/commands" "$HOME_T/eaos" "$HOME_T/skills/design-review"
 # 1. an unmodified v3 persona, exactly as e0-baseline shipped it
 git -C "$REPO" show e0-baseline:agents/developer.md > "$HOME_T/agents/developer.md"
@@ -56,6 +57,21 @@ before="$(find "$HOME_T" -type f | wc -l | tr -d ' ')"
 bash "$REPO/setup.sh" >/dev/null 2>&1
 after="$(find "$HOME_T" -type f | wc -l | tr -d ' ')"
 assert_eq "re-run adds or removes nothing" "$before" "$after"
+
+# global skill for Cursor / Codex: generated from the one front door, no unresolved placeholder
+SK="$AGENTS_SKILLS_HOME/agentic-os/SKILL.md"
+if [ -f "$SK" ]; then ok "global skill installed"; else bad "global skill missing"; fi
+assert_eq "skill frontmatter names the skill" "name: agentic-os" "$(sed -n 2p "$SK")"
+if grep -q '\$ARGUMENTS' "$SK"; then bad "skill still carries \$ARGUMENTS"; else ok "skill has no unresolved \$ARGUMENTS"; fi
+body_cmd="$(awk 'NR==1&&/^---/{f=1;next} f&&/^---/{f=0;next} !f' "$REPO/commands/agentic-os.md" | grep -c 'Work in units')"
+assert_eq "skill carries the front door body" "$body_cmd" "$(grep -c 'Work in units' "$SK")"
+
+# --uninstall leaves nothing of ours behind (quarantine from the cleanup above is the user's)
+bash "$REPO/setup.sh" --uninstall >/dev/null 2>&1
+left="$(find "$HOME_T" -type f -not -path '*/quarantine/*' -not -name '*.bak' -not -path '*/skills/*' | grep -v 'my-own\|custom' | wc -l | tr -d ' ')"
+for f in commands/agentic-os.md agents/eaos-checker.md eaos/bin/eaos eaos/routing.yaml agents-skills/agentic-os/SKILL.md; do
+  if [ -e "$HOME_T/$f" ]; then bad "uninstall left $f"; else ok "uninstall removed $f"; fi
+done
 
 rm -rf "$HOME_T" /tmp/eaos_setup_test.$$
 echo "$pass_count passed, $fail_count failed"

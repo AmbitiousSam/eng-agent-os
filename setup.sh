@@ -36,6 +36,17 @@ install_file() {
 MANIFEST="$EAOS_DIR/runtime/legacy-manifest.sha256"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+SKILL_DIR="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os"
+
+# ./setup.sh --uninstall : remove everything this installer put on the machine. Project-local
+# .eaos/ directories, scenario stores and the quarantine folder are yours and are left alone.
+if [ "${1:-}" = "--uninstall" ]; then
+  bash "$EAOS_DIR/runtime/install-eaos-hooks.sh" --uninstall >/dev/null 2>&1 || true
+  rm -f "$COMMANDS_DIR/agentic-os.md" "$AGENTS_DIR"/eaos-builder.md "$AGENTS_DIR"/eaos-reader.md "$AGENTS_DIR"/eaos-checker.md
+  rm -rf "$CONFIG_DIR/bin" "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/routing.yaml" "$SKILL_DIR"
+  say "Uninstalled. Kept: project .eaos/ folders, $CONFIG_DIR/scenarios, $CONFIG_DIR/quarantine."
+  exit 0
+fi
 QUAR="$CONFIG_DIR/quarantine/$(date +%Y%m%d-%H%M%S)"
 removed=0; quarantined=0
 
@@ -134,6 +145,19 @@ install_file "$EAOS_DIR/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
 # stale checklists/templates from a previous v4 install that no longer exist upstream
 for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/checklists/$(basename "$f")" ] && rm -f "$f"; done
 
+# Global skill for Cursor and Codex (both load ~/.agents/skills; Cursor also shows it as
+# /agentic-os). GENERATED from the one front door so there is never a second copy to drift:
+# frontmatter swapped, host deltas prepended, $ARGUMENTS replaced (skills get no substitution).
+say "Installing global skill for Cursor / Codex -> $SKILL_DIR"
+mkdir -p "$SKILL_DIR"
+SKILL_TMP="$(mktemp)"
+{
+  cat "$EAOS_DIR/adapters/skill-head.md"
+  awk 'NR==1 && /^---/ {fm=1; next} fm && /^---/ {fm=0; next} !fm {print}' "$EAOS_DIR/commands/agentic-os.md" \
+    | sed 's/\*\*\$ARGUMENTS\*\*/**the task the user gave when invoking this skill**/'
+} > "$SKILL_TMP"
+install_file "$SKILL_TMP" "$SKILL_DIR/SKILL.md"; rm -f "$SKILL_TMP"
+
 say "Installing eaos runtime CLI + hook accelerator -> $CONFIG_DIR/bin"
 install_file "$EAOS_DIR/runtime/eaos" "$CONFIG_DIR/bin/eaos"
 install_file "$EAOS_DIR/runtime/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
@@ -148,7 +172,7 @@ okc=0; bad=0
 chk() { if [ -e "$1" ]; then okc=$((okc + 1)); else printf "  \033[0;31m✗ MISSING\033[0m %s\n" "$1"; bad=$((bad + 1)); fi; }
 chk "$COMMANDS_DIR/agentic-os.md"
 for a in eaos-builder eaos-reader eaos-checker; do chk "$AGENTS_DIR/$a.md"; done
-chk "$CONFIG_DIR/routing.yaml"; chk "$CONFIG_DIR/bin/eaos"; chk "$CONFIG_DIR/bin/eaos-hook.sh"
+chk "$CONFIG_DIR/routing.yaml"; chk "$CONFIG_DIR/bin/eaos"; chk "$CONFIG_DIR/bin/eaos-hook.sh"; chk "$SKILL_DIR/SKILL.md"
 for c in "$EAOS_DIR"/checklists/*.md; do chk "$CONFIG_DIR/checklists/$(basename "$c")"; done
 leftover="$(find "$AGENTS_DIR" -maxdepth 1 -name 'agency-*.md' 2>/dev/null | wc -l | tr -d ' ')"
 printf "  \033[0;32m✓\033[0m %s files present; legacy agency-agents remaining: %s\n" "$okc" "$leftover"
@@ -157,5 +181,6 @@ say ""
 say "Installed. Runtime state is PROJECT-LOCAL (./.eaos/ in the project you run it in)."
 say "Hooks are opt-in:   ./runtime/install-eaos-hooks.sh"
 say "Usage in Claude Code (restart it after first install):   /agentic-os <task>"
-say "Usage in Cursor / Codex:   cp $CONFIG_DIR/adapters/AGENTS.md <your-project>/AGENTS.md"
+say "Usage in Cursor:        /agentic-os <task>      (global skill, any repo)"
+say "Usage in Codex:         \$agentic-os <task>     (global skill, any repo)"
 say "Follow-ups are plain messages. Fresh context on an existing task: eaos status --packet"

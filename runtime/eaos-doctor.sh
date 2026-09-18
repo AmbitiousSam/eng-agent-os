@@ -18,6 +18,8 @@ for f in commands/agentic-os.md eaos/routing.yaml eaos/bin/eaos eaos/bin/eaos-ho
          eaos/adapters/solo-mode.md agents/eaos-builder.md agents/eaos-reader.md agents/eaos-checker.md; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
+SKILL_MD="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os/SKILL.md"
+[ -e "$SKILL_MD" ] && pass "global skill for Cursor / Codex ($SKILL_MD)" || bad "global skill missing — run ./setup.sh"
 if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help >/dev/null 2>&1; then pass "eaos CLI runs"; else bad "eaos CLI present but failed to run — run ./setup.sh"; fi
 if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help 2>/dev/null | grep -q "board"; then pass "eaos CLI is v4 (board/unit/check verbs)"; else bad "eaos CLI predates v4 — run ./setup.sh"; fi
 
