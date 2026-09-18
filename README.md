@@ -6,7 +6,8 @@ three things a model cannot give itself and enforces them at boundaries:
 1. **Working state that outlives a context** — a typed, revisioned board on disk with
    budgeted views, so a fresh context or a parallel worker sees what its siblings found.
 2. **A check made without the maker's reasoning** — a clean-context checker that grades
-   criteria and risks with executed evidence.
+   criteria, risks and **scenarios** (end-to-end expectations written at intake and held
+   outside the workspace, which builders never see) with executed evidence.
 3. **Evidence and verdicts that cannot be talked into existence** — a runtime whose exit
    codes are binding: check evidence bound to a code snapshot, canonical verdicts, risks
    that must be answered, one writer per workspace, an audit.
@@ -14,7 +15,8 @@ three things a model cannot give itself and enforces them at boundaries:
 It constrains actions and evidence, not the model's reasoning. There is no persona roster
 and no phase pipeline. Role knowledge lives in short checklists loaded on demand.
 
-Status: v4 is implemented and under evaluation. The design is
+Status: v4.0.0 is the current release, implemented and under evaluation. v3 lives on the
+`v3` branch (release v3.0.0). The design is
 `docs/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until experiments E0/E1 report);
 v3 is preserved at tag `e0-baseline`. Evidence so far is in `evals/`; read
 `docs/EVAL-PROTOCOL.md` before believing any claim here, including this one.
@@ -48,7 +50,7 @@ Follow-ups are plain messages. On a fresh context for an existing task, run
 | `commands/agentic-os.md` | the front door, about 80 lines, loaded once |
 | `agents/eaos-{builder,reader,checker}.md` | the three boundaries, tool-scoped, no personas |
 | `checklists/` | intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
-| `scripts/eaos` | the runtime: task, unit, board, check, snapshot, writer, verify, report, audit, episode, session, ctx |
+| `scripts/eaos` | the runtime: task, unit, board, check, snapshot, scenario, writer, verify, report, audit, episode, session, ctx |
 | `scripts/eaos-hook.sh` | Claude Code hooks: spawn budget, session binding, audit, context measurement |
 | `orchestrator/routing.yaml` | stakes dial, budgets, adapter capability levels |
 | `docs/specs/` | v4 draft, v3 (frozen, superseded on freeze only) |

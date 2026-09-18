@@ -111,3 +111,7 @@
   outside every workspace. v3 tagged e0-baseline.
 - v4 built: runtime verbs + 148->? tests, front door 81 lines, 3 boundary agents, checklists,
   installer cleanup, doctor, validator, README, mechanisms M-011..M-014.
+- 2026-09-18 (end): v4 review rounds 1-2 answered (6 + 4 findings, all reproduced with the
+  reviewer's scripts). Scenarios (K-3) built: `eaos scenario add|list|grade`, outside the
+  workspace, binding on completion. v3 backed up: branch `v3`, release v3.0.0. v4.0.0 released.
+  Runtime surface frozen; next is real runs, not reviews.

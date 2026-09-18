@@ -9,6 +9,8 @@ You are running one build unit for an EAOS task. `E=~/.claude/eaos/bin/eaos`.
 You were given: the unit id and its plan item, the acceptance criteria, a board view, and
 `checklists/build.md`. That is all you need; do not ask for the lead's history.
 
+0. Do not look for the task's scenarios. They are held outside the workspace for the
+   checker; reading them would make its check worthless. Build to the criteria you were given.
 1. Read the board view first. A `decision` binds you. A `risk` or `finding` in your scope
    is context you must not contradict silently; if it changes your plan, say so on the board.
 2. `$E writer claim <task> --unit <unit>` before editing anything. If it is HELD, stop and

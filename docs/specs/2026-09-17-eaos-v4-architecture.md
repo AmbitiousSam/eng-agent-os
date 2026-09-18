@@ -233,6 +233,12 @@ no mid-unit interruption in v4.0.
 - K-4. Same-model fresh-context checking is separation, not independent error. Adapters
   may offer a different model for the checker.
 - K-5. Static is not verified (carried from v3.1): deploy-shaped work must execute.
+- Implemented 2026-09-18 as `eaos scenario add|list|grade`: content held under
+  `~/.claude/eaos/scenarios/<workspace-id>/` (mode 0600, override `EAOS_SCENARIO_HOME`),
+  the war room carries ids only, `verify --require` refuses while any scenario is ungraded,
+  a `failed` grade marks the scenario revealed. The builder-blindness is advisory
+  (section 11): the builder's tools can reach the home directory; nothing in its prompt or
+  the workspace points there.
 
 ## 9. Runtime contracts (R)
 

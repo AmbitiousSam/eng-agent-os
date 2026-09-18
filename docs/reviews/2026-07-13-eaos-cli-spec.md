@@ -118,3 +118,6 @@ New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditiona
 - `writer claim|release|show` — one writer per workspace (advisory on hosts without a gate).
 - `ctx <id> --tokens N` — records the lead's context size; exit 3 over the ceiling (advisory).
 - `status --packet` — the bounded continuation packet for a fresh context.
+- `scenario add|list|grade` — evaluator scenarios (K-2/K-3): written at intake from
+  disclosed requirements, stored outside the workspace, listed to the checker only, graded by
+  execution; `verify --require` refuses while any is ungraded; a failure marks it revealed.

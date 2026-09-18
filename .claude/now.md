@@ -8,7 +8,10 @@ setup.sh cleans up v1-v3 installs (280 agency-agents, 17 personas, skills, playb
 rewritten for the v4 layout. v3 preserved at tag `e0-baseline` for E0. Spec DRAFT rev 2 with an
 implementation note; freeze needs E0/E1 outcomes + tests per contract.
 
-**Position:** v4 review round 1 (871d3d0) answered: 6 findings reproduced + fixed (unavailable != ready,
+**Position (2026-09-18 end):** v4.0.0 released; v3 backed up on branch `v3` + release v3.0.0;
+scenarios (K-3) built. NEXT: real runs under v4, then review rounds on the runs. Runtime surface
+is FROZEN: no new verb without a run showing the need.
+Earlier: v4 review round 1 (871d3d0) answered: 6 findings reproduced + fixed (unavailable != ready,
 latest check decides, completion consumes units + void evidence, non-git tree hash, workspace
 writer lease, manifest-based installer cleanup with quarantine + --dry-run), E0 isolated env
 script. Round 2 (0af3a85): waiver reporting structured, lock order project->task before any

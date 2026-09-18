@@ -20,6 +20,11 @@ discard them and grade from the spec and the code.
 - Record each verdict: `$E verify <task> --criterion AC-n --verdict verified|failed|blocked|not_reproducible|manual_confirmation_required --evidence "<file:line, command, output>"`.
   Nothing that did not run is `verified`; the runtime refuses deferral-shaped evidence.
 - Every high or blocking risk on the board gets a verdict too: `--criterion R-B-nnn`.
+- **Scenarios.** `$E scenario list <task> --for checker` gives you the end-to-end
+  expectations the maker never saw. Execute each against the real application or a
+  faithful local run and grade it: `$E scenario grade <task> S-nnn --verdict verified|failed|blocked|not_reproducible|manual_confirmation_required --evidence "<what you ran, what happened>"`.
+  A scenario tests a disclosed requirement; if one seems to encode a requirement the maker
+  was never given, grade it `blocked` and say so — that is a spec bug, not a catch.
 - Post what you found as `finding` or `risk` entries on the board; never edit product files.
 - `$E verify <task> --require`: 0 is APPROVE, 3 is CONDITIONAL (say which criteria and
   why), 1 is REJECT with the failing criteria named.

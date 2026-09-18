@@ -1403,6 +1403,10 @@ def require_status(state):
         if not v or not isinstance(v.get("seq"), int):
             return False
         return v["seq"] > int(r.get("seq", 0) or 0)
+    ungraded = [sid for sid in state.get("scenarios", []) if sid not in criteria]
+    if ungraded:
+        return (False, "scenario(s) without a verdict: " + ", ".join(ungraded) +
+                " — the checker grades each by execution (`eaos scenario grade`)", [], [])
     open_risks = [r["msg"] for r in state.get("open_risks", []) if not answered(r)]
     # v4 review 1, finding 3: the new runtime state must reach the completion authority.
     units = state.get("units", {}) or {}
@@ -2917,6 +2921,10 @@ def print_packet(task_id, state, cfg):
             print(f"  {u['id']} {u['status']} {u['kind']} scope={u.get('scope')} :: {u['title']}")
     w = read_writer()
     print(f"writer: {w['task'] + '/' + w['unit'] if w else '(none)'}")
+    scn = state.get("scenarios", [])
+    if scn:
+        graded = sum(1 for s in scn if s in state.get("criteria", {}))
+        print(f"scenarios: {len(scn)} recorded, {graded} graded (content outside the workspace)")
     class A:  # minimal args shim for the lead view
         for_ = "lead"; budget = int(cfg.get("board_view_budget", {}).get("packet", 800))
         scope = None; unit = None
@@ -2948,6 +2956,110 @@ def print_packet(task_id, state, cfg):
         nxt.append("resolve: " + reason)
     print("next: " + ("; ".join(nxt) if nxt else "continue the current unit"))
     print("=== END PACKET ===")
+
+# ---------- evaluator scenarios (v4 spec K-2, K-3) ----------
+# Scenarios are end-to-end expectations written from DISCLOSED requirements before any
+# builder runs. They live OUTSIDE the workspace (the builder's tools reach the workspace;
+# keeping them elsewhere is the practical boundary — advisory, section 11) under a
+# per-workspace directory, and each one is a criterion the checker must grade by
+# execution before `verify --require` passes. A scenario revealed by a failure becomes
+# regression coverage and is marked so; it is no longer an untouched holdout.
+
+def scenarios_root():
+    base = os.environ.get("EAOS_SCENARIO_HOME") or os.path.join(
+        os.path.expanduser(os.environ.get("CLAUDE_HOME", "~/.claude")), "eaos", "scenarios")
+    ws = hashlib.sha256(os.getcwd().encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    return os.path.join(base, ws)
+
+def scenarios_path(task_id):
+    return os.path.join(scenarios_root(), f"{task_id}.json")
+
+def load_scenarios(task_id):
+    p = scenarios_path(task_id)
+    if not os.path.isfile(p):
+        return []
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+def save_scenarios(task_id, items):
+    os.makedirs(scenarios_root(), exist_ok=True)
+    try:
+        os.chmod(scenarios_root(), 0o700)
+    except OSError:
+        pass
+    p = scenarios_path(task_id)
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, indent=2)
+    os.replace(tmp, p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+
+def cmd_scenario(args):
+    task_dir(args.id)
+    items = load_scenarios(args.id)
+    if args.scenario_cmd == "add":
+        for field in ("given", "when", "then"):
+            if not getattr(args, field):
+                die("scenario add: --given, --when and --then are all required (an "
+                    "end-to-end expectation, not a test name)", 2)
+        sid = f"S-{len(items) + 1:03d}"
+        items.append({"id": sid, "title": args.title, "given": args.given, "when": args.when,
+                      "then": args.then, "requirement": args.requirement, "at": now_iso(),
+                      "revealed": None})
+        save_scenarios(args.id, items)
+        with task_lock(args.id):
+            state = load_state(args.id)
+            state.setdefault("scenarios", []).append(sid)
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{now_iso()}] SCENARIO {sid} recorded (content held outside "
+                                  f"the workspace) requirement={args.requirement or '-'}")
+        print(sid)
+        sys.exit(0)
+    if args.scenario_cmd == "list":
+        if not items:
+            print("no scenarios recorded for this task")
+            sys.exit(0)
+        state = load_state(args.id)
+        criteria = state.get("criteria", {})
+        for s in items:
+            if args.revealed and not s.get("revealed"):
+                continue
+            v = criteria.get(s["id"], {}).get("verdict", "ungraded")
+            print(f"{s['id']} [{v}]{' REVEALED ' + s['revealed'] if s.get('revealed') else ''}: "
+                  f"{s['title']}")
+            if args.full or args.for_ == "checker":
+                print(f"  given: {s['given']}\n  when:  {s['when']}\n  then:  {s['then']}"
+                      + (f"\n  requirement: {s['requirement']}" if s.get("requirement") else ""))
+        sys.exit(0)
+    if args.scenario_cmd == "grade":
+        sid = args.sid
+        sc = next((s for s in items if s["id"] == sid), None)
+        if not sc:
+            die(f"no such scenario: {sid}", 2)
+        verdict = canonicalize_verdict(args.verdict)
+        if verdict not in CANONICAL_VERDICTS:
+            die(f"scenario grade: --verdict must be one of {', '.join(CANONICAL_VERDICTS)}", 2)
+        if not args.evidence:
+            die("scenario grade: --evidence is mandatory (what was executed and what happened)", 2)
+        reject_deferral_evidence(sid, verdict, args.evidence)
+        with task_lock(args.id):
+            state = load_state(args.id)
+            ts = now_iso()
+            state.setdefault("criteria", {})[sid] = {
+                "verdict": verdict, "evidence": args.evidence, "at": ts,
+                "seq": next_seq(state), "scenario": True}
+            if verdict == "failed" and not sc.get("revealed"):
+                sc["revealed"] = ts     # a failure reveals it to the maker: regression from now on
+                save_scenarios(args.id, items)
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] SCENARIO {sid} graded {verdict}"
+                                  f"{' (revealed)' if verdict == 'failed' else ''} evidence={args.evidence}")
+        print(f"OK: {sid} = {verdict}" + (" — revealed; now regression coverage, no longer a holdout"
+                                          if verdict == "failed" else ""))
+        sys.exit(0)
 
 # ---------- argparse wiring ----------
 
@@ -3186,6 +3298,30 @@ def build_parser():
     p_ctx.add_argument("id")
     p_ctx.add_argument("--tokens", type=int, required=True)
     p_ctx.set_defaults(func=cmd_ctx)
+
+    p_scn = sub.add_parser("scenario")
+    scn_sub = p_scn.add_subparsers(dest="scenario_cmd", required=True)
+    p_sa = scn_sub.add_parser("add")
+    p_sa.add_argument("id")
+    p_sa.add_argument("--title", required=True)
+    p_sa.add_argument("--given", default=None)
+    p_sa.add_argument("--when", default=None)
+    p_sa.add_argument("--then", default=None)
+    p_sa.add_argument("--requirement", default=None,
+                      help="the disclosed requirement this scenario tests (never a secret one)")
+    p_sa.set_defaults(func=cmd_scenario)
+    p_sl = scn_sub.add_parser("list")
+    p_sl.add_argument("id")
+    p_sl.add_argument("--for", dest="for_", default="lead", choices=["lead", "checker"])
+    p_sl.add_argument("--full", action="store_true")
+    p_sl.add_argument("--revealed", action="store_true")
+    p_sl.set_defaults(func=cmd_scenario)
+    p_sg = scn_sub.add_parser("grade")
+    p_sg.add_argument("id")
+    p_sg.add_argument("sid")
+    p_sg.add_argument("--verdict", required=True)
+    p_sg.add_argument("--evidence", default=None)
+    p_sg.set_defaults(func=cmd_scenario)
 
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("id")

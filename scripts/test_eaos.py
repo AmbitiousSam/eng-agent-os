@@ -2653,5 +2653,72 @@ class TestUnitLockContract(V4Case):
             self.assertIn("recovered stale lease", f.read())
 
 
+class TestScenarios(V4Case):
+    """v4 K-2/K-3: builder-blind, checker-graded, binding on completion."""
+
+    def setUp(self):
+        super().setUp()
+        self.scn_home = tempfile.mkdtemp()
+        os.environ["EAOS_SCENARIO_HOME"] = self.scn_home
+
+    def tearDown(self):
+        os.environ.pop("EAOS_SCENARIO_HOME", None)
+        super().tearDown()
+
+    def add(self, title="expired link", req="links expire after 7 days"):
+        rc, out, err = run(self.cwd, "scenario", "add", self.tid, "--title", title,
+                           "--given", "a link created 8 days ago", "--when", "it is visited",
+                           "--then", "the response does not redirect", "--requirement", req)
+        self.assertEqual(rc, 0, err)
+        return out.strip()
+
+    def test_content_lives_outside_the_workspace(self):
+        sid = self.add()
+        inside = subprocess.run(["grep", "-rl", "8 days ago", self.cwd], capture_output=True, text=True)
+        self.assertEqual(inside.stdout.strip(), "")            # nothing in the workspace
+        self.assertTrue(any("T-001" in f for f in os.listdir(os.path.join(self.scn_home, os.listdir(self.scn_home)[0]))))
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "warroom.md")) as f:
+            wr = f.read()
+        self.assertIn(sid, wr)
+        self.assertNotIn("8 days ago", wr)                     # the war room carries the id only
+
+    def test_incomplete_scenario_refused(self):
+        rc, out, err = run(self.cwd, "scenario", "add", self.tid, "--title", "x", "--given", "g")
+        self.assertEqual(rc, 2)
+
+    def test_ungraded_scenario_blocks_completion(self):
+        sid = self.add()
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "green")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn(sid, out)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
+                           "--evidence", "created a link with created_at -8d; GET /abc -> 410")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 0)
+
+    def test_grade_needs_executed_evidence(self):
+        sid = self.add()
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified")
+        self.assertEqual(rc, 2)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
+                           "--evidence", "would pass once the runner is available")
+        self.assertEqual(rc, 2)
+        self.assertIn("deferral", err)
+
+    def test_failure_reveals_and_becomes_regression(self):
+        sid = self.add()
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "failed",
+                           "--evidence", "GET /abc redirected 302 to the target")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("revealed", out)
+        rc, out, err = run(self.cwd, "scenario", "list", self.tid, "--revealed")
+        self.assertIn(sid, out)
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 1)   # failed is honest
+        rc, out, err = run(self.cwd, "scenario", "list", self.tid, "--for", "checker")
+        self.assertIn("given:", out)
+
+
 if __name__ == "__main__":
     unittest.main()

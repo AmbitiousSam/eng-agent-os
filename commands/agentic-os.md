@@ -29,7 +29,11 @@ a deliverable class (*workflow, pipeline, CI/CD, deploy, release, migration, rol
 blocking question unless the codebase shows the house pattern; an identity or attribution
 constraint (author, e-mail form, "only my name") becomes an acceptance criterion. Never add
 `Co-Authored-By` or "Generated with" trailers unless asked. Read `checklists/intake.md`
-for anything beyond a trivial change; record criteria with `$E verify` as you go.
+for anything beyond a trivial change; record criteria with `$E verify` as you go. At
+internal or production stakes, before any builder runs, write the **scenarios** the checker
+will grade — end-to-end expectations from the disclosed requirements, held outside the
+workspace: `$E scenario add <task> --title ... --given ... --when ... --then ... --requirement "<the disclosed requirement>"`.
+Builders never read them; every scenario needs a checker verdict before the task can finish.
 
 ## Work in units
 
@@ -53,9 +57,10 @@ Spawn help through the Agent tool with these definitions and **only** these inpu
 - `eaos-reader` — research or a second opinion, read-only, any number in parallel within
   `budget.max_parallel_readers`. Give: the question, scope, `checklists/research.md`.
 - `eaos-checker` — a clean-context check at internal or production stakes. Give: the task
-  spec, `$E board view --for checker`, the snapshot id, the check commands,
-  `checklists/verdict.md`. **Never your transcript, your claims, or the builder's notes.**
-  It records verdicts itself with `$E verify`.
+  spec, `$E board view --for checker`, `$E scenario list <task> --for checker`, the
+  snapshot id, the check commands, `checklists/verdict.md`. **Never your transcript, your
+  claims, or the builder's notes.** It records verdicts itself with `$E verify` and
+  `$E scenario grade`.
 
 Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
 task is BLOCKED on the human (`$E loopback --class hard_blocker`), never "checked by me".
@@ -69,7 +74,8 @@ operability · incident · reporting. Load one when its trigger applies; do not 
 
 Every criterion has a verdict with evidence: `verified | failed | blocked | not_reproducible |
 manual_confirmation_required`. Nothing that did not execute is `verified`. Every high or
-blocking risk on the board has a verdict (`--criterion R-B-nnn`). Then
+blocking risk on the board has a verdict (`--criterion R-B-nnn`), and every scenario has been
+graded by the checker (`$E scenario grade`). Then
 `$E verify <task> --require` (0 or 3), `$E report <task>`, `$E episode close <task>`.
 Write `final-report.md` from `~/.claude/eaos/templates/final-report.md` and paste it to the
 human: what was asked, built, checked with proof, decided, not done, and what needs them.

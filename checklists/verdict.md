@@ -31,6 +31,16 @@ sources: [agents/verifier.md, commands/agentic-os.md (Step 10), orchestrator/loo
 - Never write `verified` for something that did not run. "HUMAN-RUN", "pending", "would pass", "skipped", "not run", "superseded" in the evidence means the verdict is `manual_confirmation_required` or `blocked`; `eaos verify` refuses `verified` with that evidence.
 - A superseded criterion is dropped and graded under its successor. It is not a pass.
 
+## Scenarios (holdouts the maker never saw)
+- `eaos scenario list <task> --for checker` lists end-to-end expectations written at intake
+  from the DISCLOSED requirements and held outside the workspace. Grade every one by
+  executing it (`eaos scenario grade <task> S-nnn --verdict ... --evidence "<what you ran, what happened>"`);
+  `verify --require` refuses while any is ungraded.
+- A scenario that fails is revealed to the maker by the fix and becomes regression coverage;
+  it is no longer a holdout. Say so in the report.
+- A scenario that encodes a requirement the maker was never given is a spec bug: grade it
+  `blocked` with that reason, never `failed`.
+
 ## Risks
 - Every high risk needs a verdict (`R-<msg-id>`): tested to `verified` or `failed`, or honestly `blocked` or `manual_confirmation_required`. "Follow-up" is not a verdict; `verify --require` and `report` refuse until every high risk carries one. A risk is tested or honestly deferred, never filed.
 - A matched verdict name does not prove the evidence addresses the risk (v4 R-7 not certified); say in the evidence how it does.
