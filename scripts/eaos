@@ -413,7 +413,7 @@ def all_session_maps():
 
 def active_task_ids():
     out = []
-    for tid in all_task_ids():
+    for tid in stateful_task_ids():
         try:
             if load_state(tid).get("status") != "closed":
                 out.append(tid)
@@ -793,6 +793,11 @@ def all_task_ids():
         return []
     return sorted(n for n in os.listdir(d) if re.match(r"^T-\d+$", n))
 
+def stateful_task_ids():
+    """Task dirs that carry a state.json. Legacy (v1-v3) dirs without one are skipped
+    silently by every scan — they are not an error worth a line per directory (run 8)."""
+    return [t for t in all_task_ids() if os.path.isfile(state_path(t))]
+
 def _tokenize(text):
     return sorted(re.findall(r"\w+", (text or "").lower()))
 
@@ -821,7 +826,7 @@ def compute_fingerprint(parent, kind, title, paths=None, criteria=None, outcome=
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 def find_duplicate_task(fingerprint):
-    for tid in all_task_ids():
+    for tid in stateful_task_ids():
         try:
             st = load_state(tid)
         except SystemExit:
@@ -848,7 +853,7 @@ def find_overlap_warnings(parent, title, paths, criteria):
     None, every non-closed top-level task). Advisory only — never blocks."""
     new_tokens = overlap_token_set(title, paths, criteria)
     warnings = []
-    for tid in all_task_ids():
+    for tid in stateful_task_ids():
         try:
             st = load_state(tid)
         except SystemExit:
@@ -1095,7 +1100,7 @@ def find_root(task_id, seen=None):
     return find_root(parent, seen)
 
 def tree_task_ids(root_id):
-    ids = all_task_ids()
+    ids = stateful_task_ids()
     parent_map = {}
     for tid in ids:
         try:
@@ -1132,7 +1137,7 @@ def audit_task_snapshot():
     whose state.json fails to load is simply absent from the map (not counted as
     dangling) — the same best-effort tolerance tree_task_ids already applies."""
     snap = {}
-    for tid in all_task_ids():
+    for tid in stateful_task_ids():
         try:
             st = load_state(tid)
         except SystemExit:
@@ -2232,6 +2237,19 @@ def cmd_session(args):
                 if owners:
                     die(f"refusing --fresh bind: {args.id} is already bound to session(s) "
                         f"{owners}", 1)
+            if args.resume:
+                # A fresh context picking up an existing task (`status --packet <task>`,
+                # run 8): no `task new` happens, so the --fresh path never binds and the
+                # checker spawn went uncounted. Accepted only when the task is ORPHANED
+                # (no other session claims it) and this session is not already working an
+                # active task — a crafted command cannot take over a claimed task.
+                owners = [o for o, t in all_session_maps().items() if t == args.id and o != sid]
+                if owners:
+                    die(f"refusing --resume bind: {args.id} is already bound to session(s) "
+                        f"{owners}", 1)
+                mine = read_session_map(sid)
+                if mine and mine != args.id and mine in active_task_ids():
+                    die(f"refusing --resume bind: session {sid} is working {mine}", 1)
             write_session_map(sid, args.id)
         print(f"OK: session {sid} -> {args.id}")
     elif args.session_cmd == "unbind":
@@ -3192,6 +3210,10 @@ def build_parser():
             sp.add_argument("--fresh", action="store_true",
                             help="only bind a recently created task no other session "
                                  "claims (the PostToolUse binder's guard)")
+        if name == "bind":
+            sp.add_argument("--resume", action="store_true",
+                            help="bind a fresh context to an existing ACTIVE task no other "
+                                 "session claims (the binder's path for `status --packet`)")
         sp.add_argument("--session", default=None,
                         help="host session id; defaults to $EAOS_SESSION_ID")
         sp.set_defaults(func=cmd_session)

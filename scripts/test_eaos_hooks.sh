@@ -416,6 +416,29 @@ assert_contains "(n) packet flags the ceiling" "$packet" "OVER CEILING"
 rm -rf "$PROJ"
 
 echo ""
+echo "(o) resume path: a fresh context binds through 'status --packet <task>' (run 8)"
+new_project; TID="$(new_task "$PROJ" "resume me")"
+mkdir -p "$PROJ/.eaos/T-900"          # a legacy dir without state.json must stay silent
+noise="$(cd "$PROJ" && python3 "$EAOS" session resolve --session nobody 2>&1 || true)"
+if printf '%s' "$noise" | grep -q "no state.json"; then bad "(o) legacy dir produced noise"; else ok "(o) legacy task dir without state.json is skipped silently"; fi
+pj() { python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "session_id": sys.argv[2], "cwd": sys.argv[1], "tool_use_id": "tu-o-" + sys.argv[2],
+  "tool_input": {"command": sys.argv[3]}, "tool_response": {"stdout": "=== EAOS CONTINUATION PACKET ===\n", "stderr": ""}}))
+' "$1" "$2" "$3"; }
+run_hook posttool "$(pj "$PROJ" so1 "echo \"eaos status --packet $TID\"")"
+if [ -e "$PROJ/.eaos/sessions/so1" ]; then bad "(o) echo'd status bound a session"; else ok "(o) 'status --packet' inside an echo string binds nothing"; fi
+run_hook posttool "$(pj "$PROJ" so2 "~/.claude/eaos/bin/eaos status --packet $TID 2>&1 | head -200")"
+assert_eq "(o) real run-8 command binds the fresh context" "$TID" "$(cat "$PROJ/.eaos/sessions/so2" 2>/dev/null)"
+run_hook posttool "$(pj "$PROJ" so3 "E=~/.claude/eaos/bin/eaos; \$E status $TID --packet")"
+if [ -e "$PROJ/.eaos/sessions/so3" ]; then bad "(o) a claimed task was taken by a second session"; else ok "(o) a task another session claims is not re-bound"; fi
+run_hook pretool "$(pretool_json "$PROJ" Agent eaos-checker "tu-o-spawn" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["session_id"]="so2"; print(json.dumps(d))')"
+assert_eq "(o) checker spawn in the resumed session is counted" "1" "$(spawns_of "$PROJ" "$TID")"
+run_hook posttool "$(pj "$PROJ" so4 "\$E status $TID")"
+if [ -e "$PROJ/.eaos/sessions/so4" ]; then bad "(o) plain status bound a session"; else ok "(o) status without --packet binds nothing"; fi
+rm -rf "$PROJ"
+
+echo ""
 echo "========================================"
 echo "$pass_count passed, $fail_count failed"
 if [ "$fail_count" -gt 0 ]; then

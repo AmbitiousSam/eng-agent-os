@@ -46,7 +46,12 @@ requires the tool's
 `eaos session bind --fresh`, which the CLI accepts only for a task created within the last
 5 minutes that no other session already claims (review round 5, item 2 — command text and
 stdout are untrusted, so a crafted `echo "eaos task new"; echo T-001` cannot hijack an
-established task). `eaos task new --session <id>` and `$EAOS_SESSION_ID` bind directly for
+established task). A fresh context resuming a task runs no `task new`, so the binder also
+fires on a command-position `eaos status --packet T-nnn` and runs `eaos session bind --resume`,
+accepted only for an active task no other session claims and only when this session is not
+already working another active task (run 8: a resumed session's checker spawn went uncounted).
+Bindings are removed at `episode close`; an empty `.eaos/sessions/` after a run is normal.
+`eaos task new --session <id>` and `$EAOS_SESSION_ID` bind directly for
 wrappers that know their session; the session is part of `task new`'s idempotency
 fingerprint (same key from another session is a conflict; a replay re-establishes the
 mapping). `eaos episode close` re-points every session bound to the closing task at its

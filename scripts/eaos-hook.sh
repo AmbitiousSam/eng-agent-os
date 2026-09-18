@@ -119,6 +119,22 @@ if is_task_new:
     if exit_code in (0, "0", None) and len(ids) == 1:
         new_task_id = ids.pop()
 
+# Resume path (run 8): a fresh context picks an existing task up with
+# `eaos status --packet T-nnn`; no `task new` runs, so nothing bound the session and the
+# checker spawn went uncounted. Same command-position rule; the id comes from the COMMAND
+# (exactly one), and `session bind --resume` only accepts an active, unclaimed task.
+resume_task_id = ""
+if not new_task_id:
+    st_pos = r"(?:^|[;&|(]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*" + eaos_word + r"\s+status\b([^;&|\n]*)"
+    rids = set()
+    for m in re.finditer(st_pos, command):
+        if "--packet" in m.group(1):
+            rids.update(re.findall(r"(?<![\w-])T-\d+(?![\w-])", m.group(1)))
+    resp = d.get("tool_response")
+    exit_code = resp.get("exit_code", 0) if isinstance(resp, dict) else 0
+    if exit_code in (0, "0", None) and len(rids) == 1:
+        resume_task_id = rids.pop()
+
 # Idempotency key material: the tool_use_id when present (stable across a hook retry
 # for the SAME tool call), else a hash of the raw input (best-effort — still collapses
 # byte-identical retries of an otherwise unidentified call).
@@ -134,6 +150,7 @@ fields = {
     "STOP_HOOK_ACTIVE": "true" if stop_hook_active else "false",
     "IDEM_KEY": idem_key,
     "NEW_TASK_ID": new_task_id,
+    "RESUME_TASK_ID": resume_task_id,
     "TRANSCRIPT_PATH": transcript_path,
 }
 for k, v in fields.items():
@@ -164,8 +181,13 @@ posttool)
   # Bind this session to the task `eaos task new` just created. PostToolUse can never
   # block, and a failed bind only means the fallback rules apply later.
   [ "$lname" = "bash" ] || exit 0
-  [ -n "${NEW_TASK_ID:-}" ] || exit 0
   [ -n "${SESSION_ID:-}" ] || exit 0
+  if [ -z "${NEW_TASK_ID:-}" ] && [ -n "${RESUME_TASK_ID:-}" ]; then
+    (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" session bind "$RESUME_TASK_ID" \
+       --session "$SESSION_ID" --resume >/dev/null 2>&1)
+    exit 0
+  fi
+  [ -n "${NEW_TASK_ID:-}" ] || exit 0
   (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" session bind "$NEW_TASK_ID" \
      --session "$SESSION_ID" --fresh >/dev/null 2>&1)
   exit 0

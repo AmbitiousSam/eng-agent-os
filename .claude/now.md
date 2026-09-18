@@ -47,3 +47,5 @@ pre-registration). Grading harness not yet written.
   reproductions, never assurances. Three rounds converged §11.
 - Freeze rule: spec changes need run evidence, not review rounds.
 - No launch post until: hooks ✅, M-010 validated by a run, 30s demo clip.
+
+- 2026-09-18 late: runs 8-9 reviewed; hooks 1-of-6 resolved (artifact + resume-bind fix); see evals/results/2026-09-18-v4-first-runs.md

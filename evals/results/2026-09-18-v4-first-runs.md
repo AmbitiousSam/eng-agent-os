@@ -27,9 +27,30 @@ not exported). Every recorded check was snapshot-stable. Session binding: 1 of 6
    (AC-n, S-n, R-B-n); the checker grades exactly those.
 4. Run 1: toy stakes read as "skip EAOS". Fix: task new + verify + episode close are unconditional;
    toy skips units and the checker only.
-5. Hooks bound 1/6 sessions: OPEN — needs one transcript.
+5. Hooks bound 1/6 sessions: RESOLVED (see runs 8-9 below) — measurement artifact plus one real gap.
 
 ## Also found by the runs
 - Live `CHAT_ENCRYPTION_KEY` committed in `training-ai-service/.env.example:86` (run 3) — rotate.
 - Triage inbox T-028 was wrong on 2 of 4 "zero-importer" files (run 2 refused to delete them).
 - 86 pre-existing lint errors on main; typecheck script missing on main (run 6).
+
+## Runs 8-9 (EAOS cb1ed35, same day)
+
+| Run | Task | Result |
+|---|---|---|
+| 8 resume T-035 | chore / production, fresh context | packet read first; AC-1..4, S-001..4, R-B-001 (fixed ids held); checker spawned for a merge-shaped task and APPROVEd with executed evidence; no rebase/push; `verify --require` 0; episode closed verified; audit clean. **spawns recorded = 0** although a checker ran. |
+| 9 typo, toy | nothing to fix | one grep, no `task new`. Defensible (no work existed) but the front door says always; left as is — a task for a no-op is cost without value. |
+
+Fixes 1, 3 and the history-rewrite gate from cb1ed35 all held in run 8.
+
+### Finding 5 resolved: "hooks bound 1 of 6 sessions"
+Replayed the real run-3 PostToolUse payload through the hook: bind succeeds. Spawn logs for
+T-030..T-034 (1, 4, 2, 3, 2) were hook-recorded. `episode close` removes the session mapping by
+design, so counting `.eaos/sessions/` after the fact showed only the one unclosed task. **The
+1-of-6 figure was a measurement artifact.** Two real defects were behind it:
+- **Resume path never binds.** A fresh context runs `status --packet`, never `task new`, so the
+  session had no task and PreToolUse failed open: run 8's checker spawn was uncounted. Fix: the
+  binder also fires on command-position `eaos status --packet T-nnn` and calls
+  `session bind --resume`, accepted only for an active task no other session claims.
+- **Legacy task dirs printed `no state.json for task: T-nnn`** on every scan (16 lines per
+  command in synergina). Fix: scans skip dirs without state.json silently.

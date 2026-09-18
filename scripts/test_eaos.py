@@ -2720,5 +2720,30 @@ class TestScenarios(V4Case):
         self.assertIn("given:", out)
 
 
+class TestSessionResumeBind(V4Case):
+    """Run 8: a fresh context resuming a task never ran `task new`, so nothing bound it."""
+
+    def test_orphan_task_binds_and_claimed_task_refuses(self):
+        rc, out, err = run(self.cwd, "session", "bind", self.tid, "--session", "ctx2", "--resume")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "session", "bind", self.tid, "--session", "ctx3", "--resume")
+        self.assertEqual(rc, 1)
+        self.assertIn("already bound", err)
+        self.assertEqual(run(self.cwd, "session", "resolve", "--session", "ctx2")[1].strip(), self.tid)
+
+    def test_session_working_another_active_task_refuses(self):
+        other = run(self.cwd, "task", "new", "second task", "--kind", "chore")[1].strip().splitlines()[-1]
+        run(self.cwd, "session", "bind", other, "--session", "ctx2")
+        rc, out, err = run(self.cwd, "session", "bind", self.tid, "--session", "ctx2", "--resume")
+        self.assertEqual(rc, 1)
+        self.assertIn("is working", err)
+
+    def test_legacy_dir_without_state_is_silent(self):
+        os.makedirs(os.path.join(self.cwd, ".eaos", "T-900"))
+        rc, out, err = run(self.cwd, "task", "new", "third", "--kind", "chore")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("no state.json", out + err)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -120,3 +120,6 @@
   per task in v3. Failures: run 1 skipped the runtime (toy read as "no EAOS"); run 7 production
   merge with no checker + shared-branch rebase; phase check wasted turns; criterion id drift;
   hooks bound 1/6 sessions. Record: evals/results/2026-09-18-v4-first-runs.md.
+
+## 2026-09-18 (late) — runs 8-9
+Run 8 (resume T-035) proved cb1ed35 fixes hold: fixed ids, checker on merge shape, no history rewrite, closed verified. Found: resumed session never binds -> checker spawn uncounted; legacy dirs print noise. Fixed: `session bind --resume` via binder on `status --packet T-nnn`; silent scans. 'Hooks bound 1/6' was a measurement artifact (close removes bindings). Gates 166/82/22/127.

@@ -12,7 +12,8 @@ EAOS gives you three things you cannot give yourself: working state that outlive
 context (the board), a check made without your reasoning (the checker), and evidence that
 cannot be talked into existence (the runtime). Everything else is your judgement. This file
 is loaded once; follow-up messages are plain conversation. **Do not re-run this command in
-a live context.** In a fresh context on an existing task, run `eaos status --packet` first.
+a live context.** In a fresh context on an existing task, run `eaos status --packet <task>`
+first (it also binds this session to the task, so spawns are counted).
 
 `E=~/.claude/eaos/bin/eaos` (or `scripts/eaos` in an eng-agent-os checkout). Its exit codes
 are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 3 conditional ·
