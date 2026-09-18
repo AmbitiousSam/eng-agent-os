@@ -126,3 +126,6 @@ Run 8 (resume T-035) proved cb1ed35 fixes hold: fixed ids, checker on merge shap
 
 ## 2026-09-18 (night) — run 10
 Toy run created a task (fix 4 holds) but a guessed flag + chained finish closed it unverified with zero criteria. Fixed: verify syntax in front door, --status alias, zero-criteria close refused without --abandon --reason. Gates 168/82/22/127.
+
+## 2026-09-18 (night) — runs 11-12
+Run 11 premise-false, abandoned correctly. Run 12 = first full production feature on v4 (T17-10, +1000 lines, checker mutation-tested, verified, 9 min). Fixed: hook follows cd into worktrees (session-ws pointer), shared scenario evidence refused, spec ids win. Gates 169/86/22/127.

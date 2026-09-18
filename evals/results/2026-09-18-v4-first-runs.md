@@ -63,3 +63,24 @@ chained command, the task closed `unverified` with **zero criteria** and the lea
 Fixes: front door shows the verify line verbatim and says one command at a time; `--status` accepted
 as an alias; `episode close` refuses a task with zero criteria unless `--abandon --reason` (tasks
 with any recorded verdict still close honestly). T-036 stays closed-unverified as the record of it.
+
+## Run 11 (54bfdb6) — T-037, premise false
+Lead checked before building: typecheck script and blocking CI step already existed (run 6). One
+snapshot-bound type check, no edits, no spawns, closed with `--abandon --reason` (first use; reason
+logged with file lines). Correct behaviour; the use case was the reviewer's mistake.
+
+## Run 12 (54bfdb6) — T17-10 idempotent fulfilment, production, in the integration worktree
+First full feature since the fix rounds. Runtime record (worktree `.eaos/T-001`): 5 scenarios written
+before any unit; 2 build units; checks type/test/lint/other + checker's own test run, all at the
+handoff snapshot; checker (16 commands, clean context) mutation-tested the maker's tests, posted 3
+findings, APPROVE; 18 criteria verified using the spec's own ids (AC0..AC11); closed verified; audit
+clean; nothing pushed. Commit 73a661e, 8 files, +1000. Found a live coupon double-redeem bug and a
+same-month free-to-paid grant bug beyond the spec. ~9 minutes wall clock, 38 lead tool calls.
+Findings:
+1. **spawns = 0 again, different cause.** Session cwd was the main checkout; every eaos command was
+   `cd <worktree>; ...`. The hook looked at the main checkout's `.eaos`. Fix: binder follows the
+   command's `cd` target, records a session->workspace pointer, pretool/stop honour it.
+2. **All five scenarios graded with one shared evidence sentence.** Fix: `scenario grade` refuses
+   evidence identical to another scenario's; verdict checklist asks for per-scenario evidence and
+   names the mutation when leaning on the maker's tests.
+3. Spec ids (AC0, AC0a..) used instead of AC-n: sensible. Front door now says spec ids win.

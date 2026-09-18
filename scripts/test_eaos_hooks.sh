@@ -439,6 +439,29 @@ if [ -e "$PROJ/.eaos/sessions/so4" ]; then bad "(o) plain status bound a session
 rm -rf "$PROJ"
 
 echo ""
+echo "(p) worktree run: session cwd is the main checkout, the task lives elsewhere (run 12)"
+new_project; MAIN="$PROJ"; MAIN_HOME="$CLAUDE_HOME"
+WT="$(mktemp -d)"; ( cd "$WT" && python3 "$EAOS" init --max-spawns 5 --reserve-verifier 0 --reserve-loopbacks 0 >/dev/null )
+WTID="$(new_task "$WT" "worktree task")"
+wj() { python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "session_id": "swt", "cwd": sys.argv[1], "tool_use_id": "tu-p1",
+  "tool_input": {"command": "cd " + sys.argv[2] + "; git checkout -b x 2>&1; E=~/.claude/eaos/bin/eaos\n$E init && $E task new \"worktree task\""},
+  "tool_response": {"stdout": "OK: eaos initialized\n" + sys.argv[3] + "\n", "stderr": ""}}))
+' "$1" "$2" "$3"; }
+run_hook posttool "$(wj "$MAIN" "$WT" "$WTID")"
+assert_eq "(p) session bound inside the worktree, not the main checkout" "$WTID" "$(cat "$WT/.eaos/sessions/swt" 2>/dev/null)"
+assert_eq "(p) workspace pointer written" "$WT" "$(cat "$MAIN_HOME/eaos/session-ws/swt" 2>/dev/null)"
+run_hook pretool "$(pretool_json "$MAIN" Agent eaos-checker "tu-p2" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["session_id"]="swt"; print(json.dumps(d))')"
+assert_eq "(p) checker spawn counted on the worktree task" "1" "$(spawns_of "$WT" "$WTID")"
+( cd "$WT" && python3 "$EAOS" verify "$WTID" --criterion AC-1 --verdict verified --evidence "ran" >/dev/null && python3 "$EAOS" episode close "$WTID" >/dev/null )
+MT="$(new_task "$MAIN" "main task")"
+( cd "$MAIN" && python3 "$EAOS" session bind "$MT" --session swt >/dev/null )
+run_hook pretool "$(pretool_json "$MAIN" Agent eaos-reader "tu-p3" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["session_id"]="swt"; print(json.dumps(d))')"
+assert_eq "(p) stale pointer ignored after the worktree task closed" "1" "$(spawns_of "$MAIN" "$MT")"
+rm -rf "$MAIN" "$WT"
+
+echo ""
 echo "========================================"
 echo "$pass_count passed, $fail_count failed"
 if [ "$fail_count" -gt 0 ]; then

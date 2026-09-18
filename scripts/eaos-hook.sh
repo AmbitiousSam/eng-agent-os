@@ -67,7 +67,7 @@ fi
 # this to a single process is what makes the hook fast enough to sit on every
 # PreToolUse/PostToolUse/Stop without being felt.
 parsed="$(python3 -c '
-import json, sys, shlex, hashlib, re
+import json, sys, shlex, hashlib, re, os
 
 raw = sys.stdin.read()
 try:
@@ -135,6 +135,20 @@ if not new_task_id:
     if exit_code in (0, "0", None) and len(rids) == 1:
         resume_task_id = rids.pop()
 
+# Worktree runs (run 12): the session sits in the main checkout while every eaos command
+# is `cd <worktree>; $E ...`, so the payload cwd names the WRONG .eaos and the checker
+# spawn went uncounted. Collect the command-position `cd` targets; the shell side binds in
+# the first one that really holds the task and remembers it for this session.
+cmd_dirs = []
+for m in re.finditer(r"(?:^|[;&|(]|\n)\s*cd\s+(\"[^\"]+\"|\x27[^\x27]+\x27|[^\s;&|)]+)", command):
+    t = m.group(1).strip("\"\x27")
+    t = os.path.expanduser(t)
+    if not os.path.isabs(t) and cwd:
+        t = os.path.join(cwd, t)
+    t = os.path.normpath(t)
+    if ":" not in t and "\n" not in t and t not in cmd_dirs:
+        cmd_dirs.append(t)
+
 # Idempotency key material: the tool_use_id when present (stable across a hook retry
 # for the SAME tool call), else a hash of the raw input (best-effort — still collapses
 # byte-identical retries of an otherwise unidentified call).
@@ -151,6 +165,7 @@ fields = {
     "IDEM_KEY": idem_key,
     "NEW_TASK_ID": new_task_id,
     "RESUME_TASK_ID": resume_task_id,
+    "CMD_DIRS": ":".join(cmd_dirs[:8]),
     "TRANSCRIPT_PATH": transcript_path,
 }
 for k, v in fields.items():
@@ -162,7 +177,42 @@ eval "$parsed" || exit 0
 
 cwd="${CWD:-}"
 [ -n "$cwd" ] || cwd="$PWD"
-[ -d "$cwd/.eaos" ] || exit 0   # not an EAOS project: nothing to accelerate
+
+# Session -> workspace pointer (run 12). Written by the binder when the task lives in a
+# directory other than the payload cwd (a git worktree); read by pretool/stop so they act
+# on the workspace this session is really working in. A pointer whose workspace no longer
+# resolves a task for this session is ignored (the task closed) and the payload cwd applies.
+WS_DIR="$CLAUDE_HOME_DIR/eaos/session-ws"
+ws_file=""
+[ -n "${SESSION_ID:-}" ] && ws_file="$WS_DIR/$SESSION_ID"
+if [ "$mode" != "posttool" ] && [ -n "$ws_file" ] && [ -f "$ws_file" ]; then
+  ws="$(head -n 1 "$ws_file" 2>/dev/null)"
+  if [ -n "$ws" ] && [ -d "$ws/.eaos" ] && \
+     (cd "$ws" 2>/dev/null && python3 "$EAOS_BIN" session resolve --session "$SESSION_ID" >/dev/null 2>&1); then
+    cwd="$ws"
+  fi
+fi
+if [ "$mode" != "posttool" ]; then
+  [ -d "$cwd/.eaos" ] || exit 0   # not an EAOS project: nothing to accelerate
+fi
+
+# bind_in <task> <flag>: try the command's own `cd` targets first, then the payload cwd.
+bind_in() {
+  local task="$1" flag="$2" d IFS=:
+  for d in ${CMD_DIRS:-} "$cwd"; do
+    [ -n "$d" ] && [ -f "$d/.eaos/$task/state.json" ] || continue
+    if (cd "$d" 2>/dev/null && python3 "$EAOS_BIN" session bind "$task" \
+          --session "$SESSION_ID" "$flag" >/dev/null 2>&1); then
+      if [ "$d" != "$cwd" ]; then
+        mkdir -p "$WS_DIR" 2>/dev/null && printf '%s\n' "$d" > "$ws_file" 2>/dev/null
+      else
+        rm -f "$ws_file" 2>/dev/null
+      fi
+      return 0
+    fi
+  done
+  return 0
+}
 
 lname="$(printf '%s' "${TOOL_NAME:-}" | tr '[:upper:]' '[:lower:]')"
 
@@ -183,13 +233,11 @@ posttool)
   [ "$lname" = "bash" ] || exit 0
   [ -n "${SESSION_ID:-}" ] || exit 0
   if [ -z "${NEW_TASK_ID:-}" ] && [ -n "${RESUME_TASK_ID:-}" ]; then
-    (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" session bind "$RESUME_TASK_ID" \
-       --session "$SESSION_ID" --resume >/dev/null 2>&1)
+    bind_in "$RESUME_TASK_ID" --resume
     exit 0
   fi
   [ -n "${NEW_TASK_ID:-}" ] || exit 0
-  (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" session bind "$NEW_TASK_ID" \
-     --session "$SESSION_ID" --fresh >/dev/null 2>&1)
+  bind_in "$NEW_TASK_ID" --fresh
   exit 0
   ;;
 pretool)

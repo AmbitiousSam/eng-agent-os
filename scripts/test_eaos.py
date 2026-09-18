@@ -2712,6 +2712,17 @@ class TestScenarios(V4Case):
         self.assertEqual(rc, 2)
         self.assertIn("deferral", err)
 
+    def test_shared_evidence_across_scenarios_refused(self):
+        a = self.add(); b = self.add(title="unknown link", req="unknown links 404")
+        ev = "Covered by executed tests in route.test.ts; mutation-checked"
+        self.assertEqual(run(self.cwd, "scenario", "grade", self.tid, a, "--verdict", "verified", "--evidence", ev)[0], 0)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, b, "--verdict", "verified", "--evidence", "  covered by executed tests in route.test.ts;  mutation-checked")
+        self.assertEqual(rc, 2)
+        self.assertIn("identical", err)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, b, "--verdict", "verified",
+                           "--evidence", "route.test.ts 'unknown slug' -> 404; flipping the lookup made it fail")
+        self.assertEqual(rc, 0, err)
+
     def test_failure_reveals_and_becomes_regression(self):
         sid = self.add()
         rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "failed",

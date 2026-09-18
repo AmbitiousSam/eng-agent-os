@@ -32,8 +32,8 @@ non-zero exit stops you (exit 2 = read `--help`, fix, retry). Nothing to do afte
 yourself, no units, no checker; internal = plus an independent checker; production = plus
 `checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
 is never skipped above toy because the task "is just a merge" or "is just docs".
-**Criterion ids are fixed at intake**: `AC-1..AC-n` for acceptance criteria, `S-n` for
-scenarios, `R-B-nnn` for risks. Everyone, the checker included, grades exactly those ids and
+**Criterion ids are fixed at intake**: the spec's own ids when it has
+them, else `AC-1..AC-n`; `S-n` for scenarios, `R-B-nnn` for risks. Everyone, the checker included, grades exactly those ids and
 invents no others. Two words in the ask are never assumed:
 a deliverable class (*workflow, pipeline, CI/CD, deploy, release, migration, rollout*) is a
 blocking question unless the codebase shows the house pattern; an identity or attribution

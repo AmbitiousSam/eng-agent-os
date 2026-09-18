@@ -50,6 +50,11 @@ established task). A fresh context resuming a task runs no `task new`, so the bi
 fires on a command-position `eaos status --packet T-nnn` and runs `eaos session bind --resume`,
 accepted only for an active task no other session claims and only when this session is not
 already working another active task (run 8: a resumed session's checker spawn went uncounted).
+When the session sits in one checkout and the task lives in another (a git worktree; every
+command is `cd <worktree>; eaos ...`), the binder binds in the command's own `cd` target that
+holds the task and records `~/.claude/eaos/session-ws/<session-id>`; PreToolUse and Stop then act
+on that workspace while it still resolves a task for the session (run 12: the payload cwd named
+the wrong `.eaos` and the checker spawn went uncounted).
 Bindings are removed at `episode close`; an empty `.eaos/sessions/` after a run is normal.
 `eaos task new --session <id>` and `$EAOS_SESSION_ID` bind directly for
 wrappers that know their session; the session is part of `task new`'s idempotency

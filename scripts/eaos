@@ -3073,6 +3073,16 @@ def cmd_scenario(args):
         reject_deferral_evidence(sid, verdict, args.evidence)
         with task_lock(args.id):
             state = load_state(args.id)
+            # Run 12: five scenarios were graded with one shared sentence ("covered by the
+            # executed tests"). A scenario is one end-to-end expectation; its evidence names
+            # what was executed for IT and what happened. Identical evidence is refused.
+            norm = " ".join(args.evidence.split()).lower()
+            for other, c in state.get("criteria", {}).items():
+                if other != sid and c.get("scenario") and \
+                   " ".join((c.get("evidence") or "").split()).lower() == norm:
+                    die(f"scenario grade: evidence is identical to {other}'s — each scenario "
+                        f"needs its own: the test or command that exercised it and the "
+                        f"observed result", 2)
             ts = now_iso()
             state.setdefault("criteria", {})[sid] = {
                 "verdict": verdict, "evidence": args.evidence, "at": ts,
