@@ -84,3 +84,24 @@ Findings:
    evidence identical to another scenario's; verdict checklist asks for per-scenario evidence and
    names the mutation when leaning on the maker's tests.
 3. Spec ids (AC0, AC0a..) used instead of AC-n: sensible. Front door now says spec ids win.
+
+## Token cost of the runs (from transcripts, response level, de-duplicated by message id)
+ctx0 = context at first response; fresh = uncached input + cache-creation tokens; subs = subagents.
+
+| Run | responses | ctx0 | ctx max | lead out | lead fresh | subs | sub fresh |
+|---|---|---|---|---|---|---|---|
+| v3-era T-029 design overhaul (9916a675) | 196 | 107k | 289k | 77.6k | 374k | 12 | 626k |
+| 2 dead code | 36 | 85k | 115k | 13.3k | 60k | 1 | 23k |
+| 3 env inventory | 26 | 85k | 123k | 15.4k | 68k | 4 | 121k |
+| 4 plan resolver | 94 | 85k | 175k | 32.4k | 128k | 2 | 123k |
+| 5 token revocation | 48 | 85k | 138k | 20.9k | 91k | 3 | 145k |
+| 8 resume T-035 | 30 | 85k | 129k | 12.6k | 82k | 1 | 36k |
+| 9 / 10 / 11 toy + no-op | 2-6 | 73-85k | 76-88k | 0.2-1.3k | 30-37k | 0 | 0 |
+| 12 T17-10 feature (+1000 lines) | 40 | 73k | 173k | 40.0k | 131k | 1 | 45k |
+
+Reading: (1) one command expansion per session in every v4 run (v3: one per message). (2) No v4 run
+reached 180k; none compacted. (3) **73-85k of context exists before EAOS does anything** — the front
+door is ~1.6k of it; the rest is the host (system prompt, tool schemas, MCP servers, plugin skill
+lists, CLAUDE.md). A two-response typo run costs 85k context for that reason alone. EAOS cannot
+reduce it; the user's host configuration can. (4) The v3-era row is not a controlled comparison
+(different task) but the shape is the point: 12 subagents and 626k subagent tokens vs 1 and 45k.
