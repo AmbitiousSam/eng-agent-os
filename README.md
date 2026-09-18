@@ -15,11 +15,10 @@ three things a model cannot give itself and enforces them at boundaries:
 It constrains actions and evidence, not the model's reasoning. There is no persona roster
 and no phase pipeline. Role knowledge lives in short checklists loaded on demand.
 
-Status: v4.0.0 is the current release, implemented and under evaluation. v3 lives on the
-`v3` branch (release v3.0.0). The design is
-`lab/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until experiments E0/E1 report);
-v3 is preserved at tag `e0-baseline`. Evidence so far is in `lab/evals/`; read
-`docs/EVAL-PROTOCOL.md` before believing any claim here, including this one.
+Status: v4.2.0. Hardened by twelve reviewed real runs (`lab/evals/results/2026-09-18-v4-first-runs.md`);
+no controlled comparison against v3 or a plain agent has been run yet (experiment E0 is
+pre-registered and its grader is built). v3 lives on the `v3` branch (release v3.0.0). Read
+`lab/EVAL-PROTOCOL.md` before believing any claim here, including this one.
 
 ## Quickstart (Claude Code)
 
@@ -41,20 +40,31 @@ prints the plan first. Restart Claude Code, then from inside any project:
 ```
 
 Follow-ups are plain messages. On a fresh context for an existing task, run
-`~/.claude/eaos/bin/eaos status --packet` first.
+`~/.claude/eaos/bin/eaos status --packet <task>` first.
+
+## Cursor, Codex, other hosts
+
+Run `./setup.sh` once (it installs under `~/.claude/` whether or not Claude Code is present), then
+copy `adapters/AGENTS.md` into your project root. It points the agent at the same front door and the
+same runtime script. What differs is stated there: no isolated subagents, so the independent check is
+a new chat the human opens with a ready-made packet. `adapters/README.md` lists what is enforced,
+measured or advisory per host.
 
 ## What is in the repo
 
+The product is the first five rows, about twenty files. You never run the runtime script yourself;
+the agent does, the way it runs `git`.
+
 | Path | What |
 |---|---|
-| `commands/agentic-os.md` | the front door, about 80 lines, loaded once |
-| `agents/eaos-{builder,reader,checker}.md` | the three boundaries, tool-scoped, no personas |
-| `checklists/` | intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
-| `runtime/eaos` | the runtime: task, unit, board, check, snapshot, scenario, writer, verify, report, audit, episode, session, ctx |
-| `runtime/eaos-hook.sh` | Claude Code hooks: spawn budget, session binding, audit, context measurement |
-| `runtime/routing.yaml` | stakes dial, budgets, adapter capability levels |
-| `lab/specs/` | v4 draft, v3 (frozen, superseded on freeze only) |
-| `lab/evals/` | protocol, pre-registrations, measured results |
+| `commands/agentic-os.md` | the front door, about 100 lines, loaded once per context |
+| `agents/` | three boundaries: builder, reader, checker. Tool-scoped, no personas |
+| `checklists/` | eleven, loaded on demand: intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
+| `runtime/` | `eaos` (board, units, snapshot-bound checks, scenarios, verdicts, audit), the Claude Code hook, the hook installer, doctor, `routing.yaml` |
+| `adapters/` | `AGENTS.md` entry for Cursor and Codex, the solo-mode procedure, the capability table |
+| `templates/` | report, ADR, task spec, test plan and the other documents the checklists name |
+| `tests/` | 169 runtime tests, 86 hook assertions, installer tests, the repo validator |
+| `lab/` | not product: specs, research, review records, experiment protocol, measured results |
 
 ## Trust model
 

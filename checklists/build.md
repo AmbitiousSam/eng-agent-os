@@ -12,6 +12,7 @@ sources: [agents/developer.md, agents/architect.md, playbooks/feature-delivery.m
 - Buildability check before writing: review the design for implementability and raise blocking questions now, not after building. Do not start coding with an open blocking question. A design exits planning only when the person building it agrees it can be built.
 - Design must fit the real code, files and conventions in the repo map and impact map, not an idealised version.
 - A bug is not fixed until it is reproduced (`checklists/research.md`). Plan a minimal fix with its blast radius.
+- Capture the **before** state while you reproduce, when it is cheapest: the failing output, the measured number, the screenshot. Record it (`eaos check` with the failing command, or a `--ref` file). The handoff pairs it with the after; a fix with no before is a claim.
 
 ## The ladder: write the least code that works
 - Stop at the first rung that holds: 1. Does this need to exist? (YAGNI, skip it) 2. Already in this codebase? (reuse) 3. Stdlib does it? 4. Native platform feature? (`<input type="date">` beats a picker library) 5. Already-installed dependency? 6. One line? 7. Only then: the minimum that works.

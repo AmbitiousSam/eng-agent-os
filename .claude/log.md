@@ -132,3 +132,6 @@ Run 11 premise-false, abandoned correctly. Run 12 = first full production featur
 
 ## 2026-09-18 (night) — v4.1.0 + E0 harness
 Released v4.1.0 (run-driven fixes). Built E0 grader outside repo: discovery-based black-box, 39/39 on reference, 4/9 on base, six sabotage controls each lose only the targeted check. User corrected drift: goal is completing EAOS, not synergina backlog.
+
+## 2026-09-18 (late night) — v4.2.0 restructure
+User: repo looks a mess; no separate CLI wanted. Clarified the script is the agent's tool and the host-agnostic part; user agreed to cleanup + AGENTS.md. Done: 122->72 files, runtime/ tests/ lab/ layout, AGENTS.md pointer entry, before-state + scope-check lines from michaelshimeles/skills. Did NOT cut v3 verbs (measured coupling: 63 tests). Gates 169/86/22/127.

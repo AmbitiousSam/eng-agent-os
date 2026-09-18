@@ -130,6 +130,7 @@ install_file "$EAOS_DIR/runtime/routing.yaml" "$CONFIG_DIR/routing.yaml"
 for f in "$EAOS_DIR"/checklists/*.md; do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/checklists/$(basename "$f")"; done
 for f in "$EAOS_DIR"/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
 install_file "$EAOS_DIR/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
+install_file "$EAOS_DIR/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
 # stale checklists/templates from a previous v4 install that no longer exist upstream
 for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/checklists/$(basename "$f")" ] && rm -f "$f"; done
 
@@ -156,4 +157,5 @@ say ""
 say "Installed. Runtime state is PROJECT-LOCAL (./.eaos/ in the project you run it in)."
 say "Hooks are opt-in:   ./runtime/install-eaos-hooks.sh"
 say "Usage in Claude Code (restart it after first install):   /agentic-os <task>"
+say "Usage in Cursor / Codex:   cp $CONFIG_DIR/adapters/AGENTS.md <your-project>/AGENTS.md"
 say "Follow-ups are plain messages. Fresh context on an existing task: eaos status --packet"

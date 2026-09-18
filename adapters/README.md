@@ -1,6 +1,6 @@
 # EAOS adapters — capability, not equality
 
-EAOS v4 is markdown plus a shell CLI, so any host that can run a command can use it. A
+EAOS v4 is markdown plus one runtime script the agent runs, so any host that can run a command can use it. A
 new chat reproduces a context boundary; it does not reproduce permissions or enforcement.
 `runtime/routing.yaml > adapters` records, per host, what each capability actually
 is: **enforced** (a runtime or hook refuses the wrong action), **measured** (recorded, not
@@ -18,5 +18,5 @@ prevented), **advisory** (a documented rule), **manual** (the human does it), **
 
 `solo-mode.md` is the manual procedure for a host without subagents: the checker is a new
 session given only the spec, the diff, the board view for checkers and the check commands.
-The `cursor/`, `codex/` and `windsurf/` directories hold host-specific notes from v3 and are
-kept for reference; every claim in them is advisory until probed on that host.
+`AGENTS.md` is the entry point for Cursor, Codex and any host that reads that file: copy it to a
+project root. It points at the one front door and names the host deltas; it does not restate the rules.

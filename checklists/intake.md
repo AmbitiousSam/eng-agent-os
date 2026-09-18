@@ -10,6 +10,7 @@ sources: [agents/requirements-analyst.md, skills/requirement-intake/SKILL.md, te
 - Restate the goal in one sentence. List scope and an explicit out-of-scope.
 - Write every acceptance criterion as a checkable statement ("Returns 429 when a key exceeds N req/min"). No criterion without a way to test it; a criterion nobody can check is a spec bug.
 - List assumptions: everything taken for granted.
+- Scope check before starting: uncommitted work in the checkout, and open PRs touching the same files (`gh pr list`, `gh pr diff <n> --name-only`). On overlap, stop and ask; another agent or the human may be mid-task.
 - Classify: `complexity`, `stakes`, `kind`, `signals`.
 - List open questions, each marked `blocking` or `fyi`.
 

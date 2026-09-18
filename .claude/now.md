@@ -51,3 +51,5 @@ pre-registration). Grading harness not yet written.
 - 2026-09-18 late: runs 8-9 reviewed; hooks 1-of-6 resolved (artifact + resume-bind fix); see evals/results/2026-09-18-v4-first-runs.md
 
 - 2026-09-18 night: v4.1.0 released. E0 grading harness built + validated (evals/results/2026-09-18-E0-grading-harness.md); harness at ~/.eaos-holdouts/E0/ (never paste). E0 runs themselves still unrun (human, 64 messages).
+
+- 2026-09-18 late night: v4.2.0. Repo restructured: product (commands, agents, checklists, runtime/, adapters/, templates) + tests/ + lab/. 122 -> 72 tracked files; v3 leftovers deleted (recoverable from branch v3). adapters/AGENTS.md = Cursor/Codex entry (pointer to the one front door + checker packet). Runtime verbs NOT trimmed: 63/169 tests use phase/append/gate/loopback as setup for integrity checks; cost > gain. Reference studied: michaelshimeles/skills (took before-state capture + scope check).
