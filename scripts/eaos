@@ -1413,7 +1413,6 @@ def require_status(state):
         return (False, "unit(s) not finished: " + "; ".join(unfinished) +
                 " — hand each off as READY, or `eaos unit cancel --reason` if it is out of "
                 "scope", [], [])
-    waived = []
     live_builds = [u for u in units.values()
                    if u.get("kind") == "build" and u.get("status") != "cancelled"]
     if live_builds:
@@ -1429,10 +1428,7 @@ def require_status(state):
                 return (False, f"required '{cat}' evidence is {status} for the current code "
                         f"(snapshot {snapshot_short(current)}) — evidence recorded against "
                         f"earlier code is void; re-run `eaos check`", [], [])
-        waived = [f"{u['id']}:{','.join(u['handoff']['waived'])} waived — "
-                  f"{u['handoff'].get('waive_reason')}"
-                  for u in units.values()
-                  if u.get("status") == "ready" and (u.get("handoff") or {}).get("waived")]
+        pass
     if open_risks:
         return (False, "high RISK(s) without a verdict: " + ", ".join(open_risks) +
                 " — test each (verify --criterion R-<msg> --verdict verified|failed) or "
@@ -1440,8 +1436,20 @@ def require_status(state):
                 "a verdict", [], [])
     manual = [k for k, v in criteria.items() if v["verdict"] == MANUAL_CONFIRMATION_VERDICT]
     unresolved = [k for k, v in criteria.items() if v["verdict"] in UNRESOLVED_VERDICTS]
-    manual = manual + waived      # a waived required check is a conditional outcome, never a pass
     return True, None, manual, unresolved
+
+def waived_units(state):
+    """Structured waiver records (v4 review 2, finding 1): a required check waived at a
+    READY handoff. Kept SEPARATE from criterion ids so consumers never index criteria by
+    a waiver string. A waiver is a conditional outcome, never a pass; every consumer of
+    require_status must also consult this."""
+    out = []
+    for u in (state.get("units", {}) or {}).values():
+        h = u.get("handoff") or {}
+        if u.get("status") == "ready" and h.get("waived"):
+            out.append({"unit": u["id"], "waived": list(h["waived"]),
+                        "reason": h.get("waive_reason"), "at": h.get("at")})
+    return out
 
 def print_criteria_table(state):
     criteria = state.get("criteria", {})
@@ -1476,20 +1484,20 @@ def cmd_verify(args):
     if args.require:
         state = load_state(args.id)
         ok, reason, manual, unresolved = require_status(state)
+        waivers = waived_units(state)
         print_criteria_table(state)
         if not ok:
             print(f"UNVERIFIED: {reason}")
             sys.exit(1)
-        if manual or unresolved:
+        for w in waivers:
+            print(f"CONDITIONAL: {w['unit']} waived required check(s) {w['waived']} at handoff "
+                  f"— {w['reason']}; not a verified outcome")
+        if manual or unresolved or waivers:
             # fix 2: name which class each conditional criterion belongs to — the two
             # classes carry different honesty semantics, never collapse them together.
             for k in manual:
-                if k in state.get("criteria", {}):
-                    print(f"CONDITIONAL: {k} (manual_confirmation_required) — implementation "
-                          f"may be complete; release pending human confirmation")
-                else:
-                    print(f"CONDITIONAL: {k} — a required check was waived at handoff; "
-                          f"not a verified outcome")
+                print(f"CONDITIONAL: {k} (manual_confirmation_required) — implementation "
+                      f"may be complete; release pending human confirmation")
             for k in unresolved:
                 verdict = state["criteria"][k]["verdict"]
                 print(f"CONDITIONAL: {k} ({verdict}) — implementation NOT claimed "
@@ -1644,6 +1652,14 @@ def cmd_report(args):
             lines.append(f"- {h['phase']} ({h['at']})")
         lines.append("")
 
+        waivers = waived_units(state)
+        if waivers:
+            lines.append("## Waived required checks (CONDITIONAL — not verified)")
+            for w in waivers:
+                lines.append(f"- {w['unit']}: {', '.join(w['waived'])} waived at handoff "
+                             f"({w['at']}) — {w['reason']}")
+            lines.append("")
+
         lines.append("## Decisions")
         decisions = [m for m in state["messages"] if m["type"] == "DECISION"]
         if decisions:
@@ -1763,11 +1779,12 @@ def cmd_episode_close(args):
             # with an open high RISK was refused by verify/report and still closed as
             # "verified" because this block only looked at criteria verdicts.
             ok_req, req_reason, manual_keys, unresolved_keys = require_status(state)
+            waivers = waived_units(state)
             if not ok_req:
                 verdict = "unverified"
             elif unresolved_keys:
                 verdict = "partial"
-            elif manual_keys:
+            elif manual_keys or waivers:
                 verdict = "conditional-manual"
             else:
                 verdict = "verified"
@@ -2438,7 +2455,12 @@ def valid_evidence(state, category, current_snapshot):
 
 def cmd_unit(args):
     cfg = load_config()
-    with task_lock(args.id):
+    # Canonical lock order project -> task, taken BEFORE the first mutation (v4 review 2,
+    # finding 2: a blocked handoff saved task state, then blocked on the project lock while
+    # releasing the workspace pen — exit 4 "nothing mutated" after mutating). Lock
+    # contention now exits 4 before any write; the lease release below runs under the
+    # project lock already held.
+    with project_lock(), task_lock(args.id):
         state = load_state(args.id)
         if state.get("status") == "blocked":
             ensure_not_blocked(state, args.id)
@@ -2774,17 +2796,17 @@ def write_writer(obj):
     os.replace(tmp, p)
 
 def release_workspace_writer(task_id, unit_id):
-    """Called by handoff/cancel while the TASK lock is held; takes the project lock for the
-    workspace file. Lock order project->task is the canonical one, so this helper is only
-    used from paths that already hold no other task's lock and can safely nest by taking
-    the project lock AFTER the caller has released its own state write."""
-    with project_lock():
-        w = read_writer()
-        if w and w.get("task") == task_id and w.get("unit") == unit_id:
-            try:
-                os.remove(writer_path())
-            except OSError:
-                pass
+    """Drops the workspace lease if (task, unit) holds it. Caller MUST already hold the
+    project lock (cmd_unit takes project -> task before any mutation); this helper takes
+    no lock of its own. Crash between the task-state write and this removal leaves a
+    lease held by a non-active unit; cmd_writer treats such a holder as stale and
+    recovers it (logged)."""
+    w = read_writer()
+    if w and w.get("task") == task_id and w.get("unit") == unit_id:
+        try:
+            os.remove(writer_path())
+        except OSError:
+            pass
 
 def cmd_writer(args):
     ts = now_iso()
@@ -2795,6 +2817,20 @@ def cmd_writer(args):
                 state = load_state(args.id)
                 if args.unit not in units_of(state):
                     die(f"no such unit: {args.unit}", 2)
+                if w and (w.get("task"), w.get("unit")) != (args.id, args.unit):
+                    # crash-recovery: a holder whose unit is no longer active (blocked,
+                    # ready, cancelled) cannot legitimately hold the pen
+                    stale = False
+                    try:
+                        hstate = load_state(w["task"]) if w.get("task") != args.id else state
+                        hunit = (hstate.get("units") or {}).get(w.get("unit"), {})
+                        stale = hunit.get("status") not in ("active", "stale")
+                    except SystemExit:
+                        stale = True   # holder task no longer exists
+                    if stale:
+                        warroom_log(args.id, f"[{ts}] WRITER recovered stale lease from "
+                                             f"{w.get('task')}/{w.get('unit')} (holder not active)")
+                        w = None
                 if w and (w.get("task"), w.get("unit")) != (args.id, args.unit):
                     print(f"WRITER HELD by {w['task']}/{w['unit']} since {w['at']} "
                           f"(scope {w.get('scope')}) — one writer per workspace; wait for its "
@@ -2893,8 +2929,9 @@ def print_packet(task_id, state, cfg):
             print(f"  {c['category']} {what} snapshot={snapshot_short(c.get('snapshot_before'))}"
                   f" stable={c.get('stable')}")
     ok, reason, manual, unresolved = require_status(state)
+    waivers = [f"{w['unit']}:{','.join(w['waived'])} waived" for w in waived_units(state)]
     print(f"verdict: {'all recorded criteria pass' if ok else reason}"
-          + (f"; conditional: {manual + unresolved}" if (manual or unresolved) else ""))
+          + (f"; conditional: {manual + unresolved + waivers}" if (manual or unresolved or waivers) else ""))
     ctx = state.get("context") or {}
     ceiling = int(cfg.get("max_context_tokens", 0) or 0)
     if ctx.get("last"):

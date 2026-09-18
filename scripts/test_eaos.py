@@ -2581,5 +2581,77 @@ class TestPacketAndContext(V4Case):
         self.assertIn("OVER CEILING", out)
 
 
+class TestWaiverPath(V4Case):
+    """v4 review 2, finding 1: the whole conditional path — handoff with a waiver, verify,
+    REPORT, episode — including a manual criterion alongside the waiver."""
+
+    def test_handoff_verify_report_episode_with_waiver_and_manual(self):
+        u = self.unit()
+        run(self.cwd, "check", self.tid, "--category", "test", "--unavailable",
+            "--reason", "runner unavailable")
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready", "--waive", "test",
+                           "--reason", "runner unavailable")
+        self.assertEqual(rc, 0, out)
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "independent behaviour check")
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-2", "--verdict",
+            "manual_confirmation_required", "--evidence", "needs the owner to click through")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 3, out)
+        self.assertIn("waived", out)
+        self.assertIn("AC-2", out)
+        rc, out, err = run(self.cwd, "report", self.tid)
+        self.assertEqual(rc, 0, err + out)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "artifacts", "final-report.md")) as f:
+            rep = f.read()
+        self.assertIn("Waived required checks", rep)
+        self.assertIn("runner unavailable", rep)
+        run(self.cwd, "phase", self.tid, "DONE")
+        rc, out, err = run(self.cwd, "episode", "close", self.tid)
+        self.assertEqual(rc, 0, err)
+        with open(os.path.join(self.cwd, ".eaos", "runs.jsonl")) as f:
+            self.assertEqual(json.loads(f.readlines()[-1])["verdict"], "conditional-manual")
+        rc, out, err = run(self.cwd, "status", "--packet", self.tid)
+        self.assertIn("waived", out)
+
+
+class TestUnitLockContract(V4Case):
+    """v4 review 2, finding 2: exit 4 means nothing mutated, for unit state AND the lease."""
+
+    def test_contention_leaves_unit_and_lease_unchanged(self):
+        u = self.unit()
+        self.assertEqual(run(self.cwd, "writer", "claim", self.tid, "--unit", u)[0], 0)
+        lock = os.path.join(self.cwd, ".eaos", ".lock")
+        with open(lock, "w") as f:
+            f.write("999999")
+        try:
+            rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--blocked",
+                               "--reason", "stuck")
+            self.assertEqual(rc, 4, err)
+        finally:
+            os.remove(lock)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            self.assertEqual(json.load(f)["units"][u]["status"], "active")
+        self.assertTrue(os.path.exists(os.path.join(self.cwd, ".eaos", "writer.json")))
+
+    def test_stale_holder_is_recovered_on_claim(self):
+        """Crash between the state write and the lease removal leaves a lease held by a
+        non-active unit; the next claim recovers it and logs the recovery."""
+        u = self.unit()
+        run(self.cwd, "writer", "claim", self.tid, "--unit", u)
+        # simulate the crash: mark the unit blocked out of band, leave writer.json in place
+        path = os.path.join(self.cwd, ".eaos", self.tid, "state.json")
+        with open(path) as f:
+            st = json.load(f)
+        st["units"][u]["status"] = "blocked"
+        with open(path, "w") as f:
+            json.dump(st, f)
+        u2 = self.unit("next")
+        rc, out, err = run(self.cwd, "writer", "claim", self.tid, "--unit", u2)
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "warroom.md")) as f:
+            self.assertIn("recovered stale lease", f.read())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,3 +9,4 @@ vendor/
 *.log
 __pycache__/
 *.pyc
+.e0-worktree/

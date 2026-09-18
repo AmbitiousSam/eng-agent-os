@@ -99,6 +99,15 @@ and coordination overhead are confounds E0 controls. Nothing here is proven unti
 | E0 environment | `scripts/e0_env.sh`: isolated v3 install from the tag in a separate `CLAUDE_CONFIG_DIR` |
 | "Loaded once" is a prompt instruction | Recorded as **advisory** in the adapter table |
 
+Round 2 (of 0af3a85), reproduced with the reviewer's script and fixed:
+
+| Finding | Fix |
+|---|---|
+| Waived completion crashed `report` (waiver strings mixed into criterion ids) | `waived_units()` returns structured records separate from criteria; verify, report, episode close and the packet all consume it; the report renders a "Waived required checks" section; full path tested with a manual criterion alongside |
+| Lock contention after a partial mutation; lock-order inversion | `cmd_unit` takes project → task before any write; the lease release runs under the held project lock; exit 4 now leaves unit state and lease untouched (tested). Crash between the two writes: a lease held by a non-active unit is recovered on the next claim and logged |
+| E0 config dir did not isolate literal paths in the v3 command | `e0_env.sh` rewrites `~/.claude/` literals in the installed command, records the adapted command's sha256, verifies the isolated CLI is v3 and that the hook defaults to it; a run that invokes the global CLI is invalid |
+| `--dry-run` created directories | Directory creation moved after the dry-run exit; tested on a fresh home |
+
 ## 4. Shape
 
 ```

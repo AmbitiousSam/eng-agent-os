@@ -25,9 +25,6 @@ install_file() {
   cp -f "$src" "$dst"
 }
 
-mkdir -p "$AGENTS_DIR" "$COMMANDS_DIR" "$CONFIG_DIR/templates" "$CONFIG_DIR/checklists" \
-         "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin"
-
 # ---------------------------------------------------------------------------------------
 # 1) CLEANUP of earlier EAOS versions (v1-v3), manifest-based (v4 review 1, finding 6).
 #    A file is REMOVED only if its content hash appears in install/legacy-manifest.sha256
@@ -102,8 +99,10 @@ fi
 [ "$quarantined" -gt 0 ] && say "Quarantined $quarantined item(s) (not verifiably ours) -> $QUAR (see MANIFEST.txt)"
 
 # ---------------------------------------------------------------------------------------
-# 2) INSTALL v4
+# 2) INSTALL v4  (directories are created only here — a --dry-run has exited above)
 # ---------------------------------------------------------------------------------------
+mkdir -p "$AGENTS_DIR" "$COMMANDS_DIR" "$CONFIG_DIR/templates" "$CONFIG_DIR/checklists" \
+         "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin"
 say "Installing /agentic-os -> $COMMANDS_DIR"
 install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
 

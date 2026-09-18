@@ -74,9 +74,20 @@ earlier. That is the property under test.
 The baseline tag preserves v3's source, not the environment: the global `~/.claude` now
 holds v4. E0 therefore runs from a separate Claude Code config directory built by
 `scripts/e0_env.sh` (a worktree at `e0-baseline`, installed with `CLAUDE_HOME=~/.claude-e0`,
-hooks wired there), and every session is started with `CLAUDE_CONFIG_DIR=~/.claude-e0`.
-Whether that variable is honoured must be confirmed on the machine before run 1 and
-recorded; the run log records the worktree commit and `claude --version`.
+hooks wired there), and every session is started with
+`CLAUDE_CONFIG_DIR=~/.claude-e0 CLAUDE_HOME=~/.claude-e0 claude`.
+
+v3's installed command names literal global paths (`~/.claude/eaos/...`), which now hold
+v4, and a separate config directory does not rewrite prose. The script therefore rewrites
+those literals in the installed command to the isolated directory and records the adapted
+command's sha256. That is the **only** baseline adaptation and it is hashed in the run log.
+The script also verifies the isolated CLI is v3 (no `board` verb) and that the hook script
+defaults to the isolated CLI.
+
+Before run 1, confirm on the machine that Claude Code loads the isolated command (its
+expansion names the isolated path) and record `claude --version`. **A run whose
+transcript invokes the global `~/.claude/eaos/bin/eaos` is invalid**, checked in every
+transcript alongside the hidden-check path check.
 
 ## Controls
 

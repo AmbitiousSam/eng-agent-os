@@ -29,6 +29,10 @@ assert_eq "dry run exits 0" "0" "$rc"
 case "$plan" in *"would remove"*"developer.md"*) ok "dry run plans removal of the unmodified persona" ;; *) bad "dry run did not plan developer.md removal: $plan" ;; esac
 case "$plan" in *"would quarantine"*"architect.md"*) ok "dry run plans quarantine of the customised persona" ;; *) bad "dry run did not plan architect.md quarantine" ;; esac
 [ -e "$HOME_T/agents/developer.md" ] && ok "dry run left developer.md in place" || bad "dry run removed a file"
+FRESH="$(mktemp -d)"; rmdir "$FRESH"
+CLAUDE_HOME="$FRESH" bash "$REPO/setup.sh" --dry-run >/dev/null 2>&1
+[ -e "$FRESH" ] && bad "dry run created directories in a fresh CLAUDE_HOME" || ok "dry run creates nothing in a fresh CLAUDE_HOME"
+export CLAUDE_HOME="$HOME_T"
 
 echo "=== real run ==="
 bash "$REPO/setup.sh" >/tmp/eaos_setup_test.$$ 2>&1; rc=$?

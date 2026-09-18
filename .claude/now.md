@@ -11,7 +11,9 @@ implementation note; freeze needs E0/E1 outcomes + tests per contract.
 **Position:** v4 review round 1 (871d3d0) answered: 6 findings reproduced + fixed (unavailable != ready,
 latest check decides, completion consumes units + void evidence, non-git tree hash, workspace
 writer lease, manifest-based installer cleanup with quarantine + --dry-run), E0 isolated env
-script. Next: reviewer re-probe -> real runs under v4 -> review rounds.
+script. Round 2 (0af3a85): waiver reporting structured, lock order project->task before any
+mutation, E0 env rewrites literal paths + hashes, dry-run creates nothing. Next: reviewer
+re-probe -> real runs under v4 -> review rounds.
 E0 (pre-registered, evals/results/2026-09-17-E0-preregistration.md) runs against the tag.
 Hidden checks for E0 live OUTSIDE the repo: ~/.eaos-holdouts/E0/hidden-checks.md (sha256 in the
 pre-registration). Grading harness not yet written.
