@@ -1,36 +1,20 @@
 # Now (as of 2026-09-05)
 
-**State:** main clean, all pushed. Runtime §11 literal after 5 external review rounds
-(99 CLI tests + 72 hook assertions). Hooks (M-007) opt-in via scripts/install-eaos-hooks.sh.
-Round 4: session-scoped hooks, exit 4 for lock contention, coherent audit snapshot,
-installer hardening. Round 5: unmapped sessions never adopt a task; PostToolUse binder only
-via `session bind --fresh` (command-position regex, exit_code 0, last stdout line, recent +
-unclaimed task); journal_start_revision + project-level heads.jsonl anchor (head truncation
-and coordinated in-dir rollback detected; heads.jsonl rewrite out of scope, documented);
-session in task-new idempotency; lock steals audited until `lock-steal-ack`. v3 spec FROZEN
-(docs/specs/2026-09-01-eaos-v3-architecture.md).
+**State:** v4 BUILT (2026-09-18), pending commit: model-led front door (~1.2k tokens, loaded
+once), three boundary agents (builder/reader/checker, tool-scoped, no personas), 11 on-demand
+checklists (parity-extracted from the 17 personas + playbooks), runtime verbs snapshot / check /
+unit / board / writer / ctx / status --packet, Stop hook records context size (advisory),
+setup.sh cleans up v1-v3 installs (280 agency-agents, 17 personas, skills, playbooks), validator
+rewritten for the v4 layout. v3 preserved at tag `e0-baseline` for E0. Spec DRAFT rev 2 with an
+implementation note; freeze needs E0/E1 outcomes + tests per contract.
 
-**Position:** Round 5 fixes landed; the 09-09 real run's seven blunder-fixes landed (2026-09-11)
--> awaiting round 6 reproduction/review -> then Run 3.
+**Position:** build -> gates -> commit/push -> install -> real runs under v4 -> review rounds.
+E0 (pre-registered, evals/results/2026-09-17-E0-preregistration.md) runs against the tag.
+Hidden checks for E0 live OUTSIDE the repo: ~/.eaos-holdouts/E0/hidden-checks.md (sha256 in the
+pre-registration). Grading harness not yet written.
 
-**09-11 changes (from the 09-09 run review):** verify refuses `verified` on deferral-shaped
-evidence; high RISK opens `R-<msg>` that --require/report demand a verdict for; cap 15 = 12
-planning + 2 loop-back + 1 verifier, `eaos spawn` refuses to plan into reserves; audit (p)
-flags checker roles folded into the orchestrator; setup.sh strips persona `model:` under
-inherit (doctor checks); intake: deliverable-class words are blocking questions, attribution
-constraints are ACs, deploy-shaped work carries an executed-rehearsal AC and a rehearsal gate
-before launch review; protocol body cap 400 chars (orchestrator wrote 87% of output tokens).
-
-**Real run 2026-09-09 (private repo, 3 tasks, production stakes, ~5h, ~262k output tokens):**
-hooks fired but every fire failed open — the binder demanded a literal `eaos` and the
-orchestrator writes `$E task new` (fixed: variable in command position now binds; --fresh
-guard is the real protection). 3/3 tasks reached DONE without `episode close` (new audit check
-done_without_episode_close). At 12/12 the orchestrator applied AND re-graded its own fix
-(new `reserved_verifier_spawns: 1`). Model-switch observed: 68/165 main turns on opus-5 under
-`inherit` — cause unknown (fast mode? /model?), ask user.
-
-**Other machine / after pull:** `./setup.sh && ./scripts/install-eaos-hooks.sh` (re-run the
-installer: it adds the PostToolUse entry idempotently).
+**Other machine / after pull:** `./setup.sh` (cleans up + installs v4) and
+`./scripts/install-eaos-hooks.sh`; restart Claude Code.
 
 ## Evidence so far
 - Run 1 (investigation): EAOS 6/6 precision + strategy at 1.2x; baseline wider coverage.

@@ -1,348 +1,60 @@
-# EAOS routing — who activates, when, and on which model.
-# The orchestrator reads this at INTAKE after requirements tags the task.
+# EAOS v4 runtime configuration. Read by the front door (commands/agentic-os.md), the
+# runtime CLI defaults (scripts/eaos mirrors `budget` into .eaos/config.json at init),
+# setup.sh (models.mode) and the doctor. There is no agent roster and no phase pipeline:
+# the model routes (docs/specs/2026-09-17-eaos-v4-architecture.md, section 1).
 
-# ---- Playbooks (processes that ride on the constant kernel) ----
-# The loop runner (orchestrator/loop.md) selects one by trigger/command, then runs its phases
-# under kernel rules. Add a process = add a file in playbooks/ + a line here. Kernel behaviors
-# (protocol, war room, memory, human gates, pre-push gate) are inherited by all of them.
-# /agentic-os is the UNIVERSAL front door: fast-triage the description against these hints and
-# route immediately (incidents skip intake ceremony). Dedicated commands are just shortcuts.
-playbooks:
-  feature-delivery:
-    file: playbooks/feature-delivery.md
-    command: /agentic-os
-    trigger: "kind in [feature, chore] OR default"
-    default: true
-    hints: [add, build, implement, create, refactor, improve, upgrade]
-  bug-fix:
-    file: playbooks/bug-fix.md
-    command: /agentic-os
-    trigger: "kind == bug"
-    hints: [bug, broken, fails, wrong, regression, crash, "doesn't work"]
-  incident-response:
-    file: playbooks/incident-response.md
-    command: /agentic-os        # one front door; fast triage skips intake ceremony for incidents
-    trigger: "kind == incident"
-    fast_path: true             # skip normal INTAKE; incident-commander's INGEST takes over
-    hints: [outage, down, "5xx", alarm, paged, incident, degraded, "prod is"]
-  investigation:
-    file: playbooks/investigation.md
-    command: /agentic-os
-    trigger: "kind == question"
-    hints: ["how does", "why is", "what would it take", explain, understand, investigate]
-  product-framing:
-    file: playbooks/product-framing.md
-    command: /agentic-os
-    trigger: "kind == product"
-    hints: ["build me a", "new product", "mvp", "from scratch"]
-  release:
-    file: playbooks/release.md
-    command: /agentic-os
-    trigger: "kind == release"
-    hints: [release, rollout, canary, "ship to prod", "feature flag"]
-  venture:
-    file: playbooks/venture.md
-    command: /agentic-os
-    trigger: "kind == venture"
-    # Hints are TIE-BREAKERS on viability-shaped asks, not keyword traps: an ask with a clear
-    # engineering shape ("fix the revenue report export", "add a Redis caching tier") routes by
-    # its engineering kind even when a word below appears. Multi-word forms keep bare words like
-    # "tier"/"revenue" from hijacking ordinary tasks.
-    hints: ["business idea", "startup idea", "should we build", "is there a market", monetize,
-            pricing, credits, "subscription plan", packaging, "pricing tier", promo,
-            "revenue model", upsell]
+version: 4
 
-# ---- Complexity scale (set by requirements-analyst) ----
-complexity_levels: [trivial, small, standard, complex]   # 0..3
-
-# ---- Stakes (set by requirements-analyst at INTAKE; M-010 stakes-proportional lifecycle) ----
-# Complexity measures how HARD the work is; stakes measure what BREAKS if it's wrong.
-# Evidence: eval run 2 — full lifecycle on a non-deployed toy cost 14.4x baseline tokens
-# while launch-review/ops/docs phases yielded zero defects (evals/results/2026-09-01-run2.md).
-# Ceremony scales with stakes, never with enthusiasm:
-#   toy        — nothing deploys, no real users/money/data at risk (demos, spikes, learning)
-#   internal   — real users are teammates; blast radius is inconvenience, not money/trust
-#   production — external users, money paths, PII, or anything deploy-bound
-stakes_levels: [toy, internal, production]
-stakes_rules:
-  toy:                       # keep the defect-catchers, drop the org theater
-    skip: [launch_review, devops-engineer, platform-engineer, sre-observability, tech-writer]
-    keep_note: "security-reviewer still activates on money/auth signals — run 2's defect
-                yield came from security review + verifier, so they are never stakes-skipped"
-  internal:
-    skip: [launch_review]    # unless a conditional signal (auth/pii/payments) pulls it back
-  production: {}             # full lifecycle; no skips
-
-
-# ---- Task kind (set by requirements-analyst; drives the flow + playbook selection) ----
-# The front door takes ANY engineering work: build it (feature/chore/refactor), fix it (bug),
-# respond to it (incident), or understand it (question). Kinds without a dedicated playbook
-# route to the default (feature-delivery).
-task_kinds: [feature, bug, refactor, chore, incident, question, product, release, venture]
-# greenfield = brand-new repo/service with no existing code to map.
-greenfield_signal: new-repo
-
-# ---- Incident primitives (rails for the incident-response playbook) ----
-incident:
-  severity_levels: [sev1, sev2, sev3, sev4]   # sev1 = highest impact
-  mitigate_before_root_cause: true            # stop the bleeding first; diagnose after
-  postmortem: blameless                       # COE-style; written to memory/lessons via templates/postmortem.md
-  fast_gates: true                            # incidents favor speed; skip non-critical ceremony
-
-# ---- Signals the analyst may tag (extend freely) ----
-signals:
-  - db-schema-change
-  - data-migration
-  - public-api
-  - auth
-  - pii
-  - payments
-  - infra
-  - ci-change
-  - perf-critical
-  - new-service
-  - breaking-change
-  - slo-impacting
-  - ui
-
-# ---- Activation rules ----
-agents:
-  always: [requirements, developer, code-reviewer]   # every non-trivial task
-
-  conditional:
-    codebase-analyst:
-      # The navigator. Runs at GROUND for ANY task touching existing code (i.e. not greenfield).
-      # Builds/refreshes the repo map and the per-task impact map; reproduces bugs.
-      when: "NOT greenfield"
-    architect:
-      when: "complexity>=standard OR new-service OR breaking-change OR perf-critical"
-    qa-engineer:
-      when: "complexity>=small OR public-api OR data-migration OR payments"
-    security-reviewer:
-      when: "auth OR pii OR payments OR public-api OR new-service"
-    devops-engineer:
-      when: "infra OR new-service OR ci-change OR breaking-change"
-    platform-engineer:
-      when: "new-service OR perf-critical OR infra"
-    sre-observability:
-      when: "new-service OR perf-critical OR slo-impacting"
-    tech-writer:
-      when: "public-api OR new-service OR complexity>=standard"
-
-  # On trivial tasks, skip the loop entirely; only developer + quick self-review run.
-  skip_when_trivial:
-    [architect, qa-engineer, security-reviewer, devops-engineer,
-     platform-engineer, sre-observability, tech-writer]
-
-# ---- Model routing ----
-# Tiers are ABSTRACT. Map each tier to whatever models your harness exposes. The values below
-# use Claude Code's FAMILY aliases (opus/sonnet/haiku), which auto-track the latest version in
-# that family — so this config does not go stale. To pin a version or use another provider,
-# change ONLY these three values; every agent references the tier name, not a model. (Concrete
-# examples as of 2026: reasoning≈Opus 4.8, coding≈Sonnet 4.6, cheap≈Haiku 4.5 — informational.)
 models:
-  # mode: inherit (default) — every spawn uses the model the USER selected for the session.
-  #   Portable to any tool/provider, zero assumptions; what you pick is what runs.
-  # mode: tiered — opt-in cost profile: spawns get the by_agent tier below, where the
-  #   harness supports a per-spawn model. Falls back to inherit (with a war-room note)
-  #   where it doesn't. The config never silently promises tiers it can't deliver.
+  # inherit: every spawn uses the model the human selected for the session. setup.sh
+  # strips any `model:` pin from the installed agent definitions when this is `inherit`.
+  # The 2026-09-09 run showed a pinned command running 68/68 command-origin turns on a
+  # model the human had not chosen.
   mode: inherit
-  tiers:
-    reasoning: opus      # planning, architecture, threat modeling, hard calls
-    coding:    sonnet    # implementation, tests, diff review, pipelines
-    cheap:     haiku     # docs, summaries, formatting, routine checks
 
-  by_agent:
-    orchestrator:       reasoning
-    requirements:       reasoning
-    codebase-analyst:   coding      # tracing code + grep; escalate to reasoning for gnarly bugs
-    incident-commander: reasoning   # live-incident diagnosis; correctness under pressure
-    verifier:           reasoning   # independent done-grading; fresh context, hard calls
-    ceo-strategist:     reasoning   # business pack
-    product-manager:    reasoning
-    finance-analyst:    reasoning
-    growth-lead:        coding
-    architect:          reasoning
-    platform-engineer:  reasoning
-    security-reviewer:  reasoning
-    developer:          coding
-    qa-engineer:        coding
-    code-reviewer:      coding
-    devops-engineer:    coding
-    sre-observability:  coding
-    tech-writer:        cheap
+# ---- Stakes: what breaks if this is wrong. Sets how much of the conscience fires. ----
+stakes:
+  levels: [toy, internal, production]
+  toy:          # nothing deploys, no real users/money/data at risk
+    checker: optional
+    checklists: [build]
+  internal:     # real users are teammates; blast radius is inconvenience
+    checker: required
+    checklists: [build, review, test-adequacy]
+  production:   # external users, money paths, PII, anything deploy-bound
+    checker: required
+    checklists: [build, review, security, test-adequacy, deploy-rehearsal, operability]
+    rehearsal: required     # deploy-shaped work must EXECUTE before it can be verified
+  # Deliverable-class words in the ask are never assumed (checklists/intake.md):
+  always_ask_about: [workflow, pipeline, ci/cd, deploy, release, migration, rollout]
 
-  # Per-call escalation/de-escalation overrides.
-  escalate_when:
-    - "code-reviewer AND review_severity==block -> reasoning"
-    - "code-reviewer AND signals contains (auth|payments|pii) -> reasoning"
-  deescalate_when:
-    - "any agent summarize/format sub-step -> cheap"
-
-# ---- Efficiency guards ----
+# ---- Budgets (mirrored into .eaos/config.json by `eaos init`) ----
 budget:
-  # Token-level budgeting is unenforceable here — the model cannot measure its own token usage.
-  # Use a countable proxy instead: cap on agent spawns. Enforced by the eaos CLI when present
-  # (config.json mirrors these values at `eaos init`); prompt-enforced otherwise.
-  # 15 = 12 planning slots + 2 loop-back slots + 1 verifier slot. Real run 2026-09-09 planned
-  # rosters to exactly 12 with zero slack, so every loop-back ate an independent role. The
-  # budget can run out of makers, never out of an independent checker.
-  max_agent_spawns_per_task: 15
-  reserved_verifier_spawns: 1     # top slot(s): verifier only (T-001 msg-039)
-  reserved_loopback_spawns: 2     # open only once `eaos loopback` recorded one; planning into them is refused
-  on_over_budget: [downgrade_conditional_one_tier, then_drop_lowest_value, then_BLOCK_on_human]
-  never: fold_a_checker_role_into_the_orchestrator   # audit check (p) flags it
-parallelism:
-  within_phase: true        # independent agents in a phase MAY run concurrently
-  fan_out_test: "only split work you could hand to separate engineers w/ no further talk"
-  # Parallelism must EARN its cost — it scales with complexity, never applied by default:
-  scale_by_complexity:
-    trivial:  none          # one agent, sequential. Parallel here is pure waste.
-    small:    none          # sequential; a second opinion only if review demands it
-    standard: pairs         # at most the proven pairs (dev∥qa-tests, reviewer∥security)
-    complex:  full          # fan out wherever the fan_out_test passes
-  never: "two agents editing the same files, or fan-out on work smaller than its coordination cost"
-  isolation: "for complex full fan-out, spawn writing subagents with worktree isolation when the harness supports it (each gets its own checkout); readers never need it"
-# Enforced by the eaos CLI when present (config.json mirrors these values at `eaos init`);
-# prompt-enforced otherwise.
+  max_agent_spawns_per_task: 15    # 12 planning + 2 loop-back + 1 verifier
+  reserved_verifier_spawns: 1      # the top slot is a checker's, always
+  reserved_loopback_spawns: 2      # open only after `eaos loopback` records one
+  max_parallel_readers: 4          # readers contribute intelligence, budgeted
+  max_context_tokens: 150000       # advisory ceiling for the lead (v4 C-4)
+  required_checks: [test]          # a build unit's READY handoff needs this evidence
+  board_view_budget: {lead: 1500, unit: 1500, checker: 2500, packet: 800}
+
+# ---- Loop guard (unchanged from v3; enforced by `eaos loopback`) ----
 loop_guard:
-  max_same_issue_loops: 3   # then escalate deadlock to human
-  retry_must_vary: true     # a retry MUST change approach vs the previous attempt. "Same
-                            # approach" is judged by an EXTERNAL anchor, not model recollection:
-                            # same error class AND same failing test/validator output as
-                            # recorded in the attempt ledger. Same action twice on an unchanged
-                            # recorded failure is spinning, not learning; escalate instead.
-  error_classes:            # classify before retrying:
-    recoverable: "syntax, missing import, failing assertion → retry WITH a varied approach"
-    hard_blocker: "missing credentials/access, undefined requirement, absent dependency →
-                   no retries; escalate immediately with what's needed"
-  attempt_ledger: true      # on each loop-back, carry a one-line-per-attempt summary
-                            # (approach → outcome), never full transcripts of failed tries
-  goal_anchor: true         # ANTI-DRIFT: every loop-back and phase hand-off re-includes the
-                            # ORIGINAL acceptance criteria VERBATIM (from task-spec.md), never a
-                            # paraphrase — agents iterate against the spec, not against a
-                            # summary of their own prior reasoning (summaries-of-summaries drift)
-  max_total_loopbacks: 8    # hard ceiling on ALL backward edges per task (not just same-issue);
-                            # at the ceiling: halt, hand the human the attempt ledger + best
-                            # current state — never keep thrashing
-  ground_truth_rule: "every loop iterates against an EXTERNAL anchor (test runner, validator,
-                      schema, spec criteria) — a loop checked only against the model's own
-                      prior output is drift, not progress"
+  max_same_issue_loops: 3
+  max_total_loopbacks: 8
 
-# ---- Autonomy (the run is autonomous except at these human gates) ----
-autonomy:
-  mode: autonomous          # autonomous | supervised (supervised = confirm each phase)
-  gate_owners_auto_roster: true   # if a required governance gate (launch_review, design_review)
-                                  # fires and its owner isn't already on the roster, add that
-                                  # owner for THAT GATE ONLY — a mandatory gate must never fire
-                                  # against a persona nobody routed in.
-  human_gates:
-    - blocking_product_question      # a decision only the human can make
-    - irreducible_product_tradeoff   # not a technical disagreement (those auto-resolve)
-    - deadlock                       # same issue loops > loop_guard.max_same_issue_loops
-    - destructive_action             # deploy / push / migrate / spend money — always confirm
-    - unmitigable_high_sev_security  # security block with no automatic mitigation
-  auto_proceed:               # never ask permission for these
-    [routing, design, implementation, review_loops, testing, documentation, write_deploy_guide]
-
-  # ---- Pre-push gate: self-review, THEN code checks. NEVER push until both pass. ----
-  pre_push:
-    # 1) Self-review: the agent reviews its OWN work before pushing (don't push unreviewed code).
-    self_review:
-      reviewer: code-reviewer        # re-run on the FINAL diff (fresh pass, not the earlier one)
-      checklist:
-        - diff matches spec + design and stays within the impact map (no scope creep)
-        - every prior REVIEW finding and QA bug is actually resolved
-        - no leftovers: debug logs, TODOs, commented-out code, dead code
-        - no secrets/keys/tokens or .env committed
-        - commit author/e-mail/trailers match the human's attribution instruction exactly
-          (no Co-Authored-By / Generated-with unless the human asked for it)
-        # Acceptance-criteria grading is owned by `verifier` at independent_verify below —
-        # EXCEPT on trivial/small tasks, where the verifier is skipped, so this checklist is
-        # the only criteria gate they get:
-        - "acceptance criteria all met — ONLY when complexity < standard (verifier owns this
-           at independent_verify for standard/complex; don't grade it twice)"
-      on_fail: loop_to_implement     # fix first; never push unreviewed/flagged code
-    # 2) Code checks: the PROJECT's own test/build/lint (not EAOS's structural validator).
-    code_checks:
-      required: [test, build, lint]  # run all that exist; a missing one is skipped, not failed
-      source: ".eaos/memory/codebase/map.md"   # verified commands live here
-      on_red: loop_to_implement      # fix first; never push failing code
-    # 3) Independent verify: a FRESH verifier (no authoring context) grades every acceptance
-    #    criterion with evidence and re-runs the checks itself. Maker≠checker on the stop decision.
-    independent_verify:
-      reviewer: verifier             # spawned fresh; gets only spec + final diff + check commands
-      when: "complexity >= standard" # trivial/small skip this gate
-      on_reject: loop_to_implement   # relay failing criteria via skills/sensor-feedback
-    push_is_destructive: true        # still human-confirmed even when green (see human_gates)
-
-  # ---- Design review board (pre-implementation governance for complex work) ----
-  design_review:
-    required_when: "complexity == complex"
-    skill: skills/design-review
-    owner: architect          # convergence: one exchange per OBJECT, architect decides, security veto
-
-  # ---- Launch review (pre-ship governance gate) ----
-  launch_review:
-    required_when: "complexity >= standard AND kind in [feature, product]"
-    checklist: templates/launch-review.md
-    verdict: "GO required before DEPLOY exit; NO-GO loops to owning phase"
-    owners: [security-reviewer, sre-observability]
-  # Bias hard toward making a reasonable assumption and continuing. Asking is the exception.
-  clarification:
-    default: assume_and_proceed     # record the assumption in the spec; the human can correct later
-    max_questions_per_run: 3        # hard cap; batch into ONE round, never trickle
-    ask_only_if_ALL_true:
-      - changes_approach            # the answer materially changes design/scope (not cosmetic)
-      - not_inferable               # can't be inferred from codebase, conventions, task text, or a sane default
-      - expensive_to_reverse        # guessing wrong means real rework, not a quick edit
-    always_ask_about:               # the one exception to assume-and-proceed (real run 2026-09-09)
-      - deliverable-class words in the ask: workflow, pipeline, ci/cd, deploy, release, migration, rollout
-      - identity/attribution constraints (author, e-mail form, "only my name") -> become ACs
-    never_ask_about:                # decide these yourself and note the choice
-      - naming, wording, copy
-      - reversible/low-cost choices (a library you can swap, a default value)
-      - style/formatting/anything lint or convention already answers
-      - anything the codebase or existing patterns already demonstrate
-    examples:
-      ask: ["per-API-key vs per-IP rate limiting (changes the whole design)",
-            "should deleting an account hard-delete or soft-delete user data (irreversible, legal)"]
-      assume: ["which date format to show (pick locale default, note it)",
-               "button label / spacing (pick sensible, proceed)",
-               "which test runner (use the repo's existing one)"]
-
-# ---- Re-routing after GROUND ----
-# The impact map can reveal danger zones the intake didn't (e.g. the change touches the auth
-# module). Those become signals that re-run the conditional rules above BEFORE planning — so
-# security/platform/etc. get pulled in based on what the code actually shows, not just the ask.
-reroute_after_ground: true
-
-# ---- Runtime layout (project-local; created on first run) ----
-runtime:
-  root: ".eaos"                       # per-project
-  task_dir: ".eaos/<task-id>/"        # warroom.md + artifacts/ (incl. impact-map.md)
-  memory: ".eaos/memory/"             # decisions/ patterns/ lessons/
-  codebase_map: ".eaos/memory/codebase/map.md"   # cached repo map (+ map.meta git SHA)
-config_home: "~/.claude/eaos/"        # routing.yaml, protocol.md, loop.md, templates/
-
-# ---- Integrations (optional ecosystem tools; ALL auto-detected, ALL with graceful fallback) ----
-# Each attacks a different cost/quality axis. None is required; EAOS runs bare.
-integrations:
-  agency-agents:            # WHO: extra specialist personas (delegate pool)
-    enabled: auto           # installed by setup.sh as agency-*.md in ~/.claude/agents
-    role: "developer delegates specialized subtasks (e.g. niche frontend) instead of duplicating"
-    fallback: "EAOS core personas handle everything themselves"
-  codegraph:                # CONTEXT: cheaper, more accurate code understanding
-    enabled: auto           # use when .codegraph/ exists in the target project
-    tools: [context, search, impact, callers, affected]
-    role: "GROUND repo/impact maps + scoped regression (codegraph affected)"
-    fallback: grep          # full grep/glob/read path remains
-  ponytail:                 # OUTPUT CODE: write the least code that works
-    enabled: auto           # host plugin: /plugin install ponytail@ponytail (Claude Code)
-    role: "reinforces the developer's ladder + /ponytail-review as over-engineering sensor"
-    fallback: "ladder + reviewer delete-list are baked into the personas — discipline holds without the plugin"
-  rtk:                      # COMMAND OUTPUT: compress shell results 60-90% before they hit context
-    enabled: auto           # host-level: rtk init -g (PreToolUse hook rewrites bash → rtk)
-    role: "cheapens GROUND greps, test/build runs, verifier re-runs, git ops across ALL agents"
-    note: "failures tee full raw output to ~/.local/share/rtk/tee/ — read the log when compressed output lacks detail; never re-run just to see more"
-    fallback: "raw command output (more tokens, same behavior)"
+# ---- Adapters: capability, not equality (spec section 11) ----
+# enforced = a runtime or hook refuses the wrong action; measured = a runtime records it;
+# advisory = documented rule, nothing stops a violation; planned = not built.
+adapters:
+  claude-code:
+    fresh_context_unit: enforced          # Agent tool subagent
+    checker_without_maker_transcript: advisory   # prompt construction; artifacts readable
+    scenarios_hidden_from_maker: advisory
+    spawn_budget_gate: enforced           # PreToolUse hook -> eaos spawn (fail-open on infra)
+    stop_time_audit: enforced             # Stop hook -> eaos audit (fail-open on infra)
+    writer_lease: advisory                # runtime lease; edits are not gated
+    context_ceiling: measured             # Stop hook -> eaos ctx; cannot force a reset
+    check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff
+  cursor: {fresh_context_unit: manual, everything_else: advisory}
+  codex: {fresh_context_unit: manual, everything_else: advisory}

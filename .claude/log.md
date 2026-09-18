@@ -96,3 +96,18 @@
   attribution ACs, no-fold; protocol body cap 400. Tests 103->111 CLI, 73 hook.
 - Token observation (09-09 run, deduped): main 227k out / 50.5M cache-read; 25 subagents 35k
   out / 48.9M cache-read. Orchestrator prose = 87% of output.
+
+## 2026-09-17/18 — Software-factory study, v4 spec (two review rounds), E0 pre-registration, v4 build
+- Study (docs/research/2026-09-17-software-factories-study.md): minimalist factories are ~5-30
+  files, zero role prose (attractor = 3 specs, 0 code); persona studies + Cognition + Anthropic:
+  boundaries matter, costumes don't. Harness papers: harness swaps move scores 10-20pp and cost
+  up to 40x at fixed model. Our 09-09 lead ran at ~318k median context, 0 compactions, 627k max.
+- v4 spec (DRAFT rev 2): EAOS constrains actions and evidence, not reasoning. Board, checker,
+  runtime; disposition of every v3 component; capability-qualified adapters; freeze rule.
+  Reviewer rounds fixed: episode-close verdict, model pin (68/68 command turns on opus), risk
+  registration (+ severity contract, fingerprint, invalid flag), ordering by sequence, E1
+  two-stage classification (scripts/experiment_outcome.py), measurement artifact.
+- E0 pre-registered: 2x2 x2 repeats on pinned flask tutorial; hidden checks frozen by sha256
+  outside every workspace. v3 tagged e0-baseline.
+- v4 built: runtime verbs + 148->? tests, front door 81 lines, 3 boundary agents, checklists,
+  installer cleanup, doctor, validator, README, mechanisms M-011..M-014.

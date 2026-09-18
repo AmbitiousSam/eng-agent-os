@@ -400,6 +400,21 @@ sh -c "$cmd" </dev/null >/dev/null 2>&1
 assert_eq "(m) quoted hook command execs from a path with spaces" "0" "$?"
 rm -rf "$(dirname "$HDIR")"
 
+echo "=== (n) stop records the lead's context size from transcript_path (v4 C-4, advisory) ==="
+new_project 5
+TID="$(cd "$PROJ" && python3 "$EAOS" task new "ctx test" --session sn)"
+( cd "$PROJ" && python3 "$EAOS" phase "$TID" DESIGN >/dev/null )
+FAKE_TRANSCRIPT="$PROJ/transcript.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":5}}}' \
+               '{"type":"assistant","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":170000,"cache_creation_input_tokens":80}}}' > "$FAKE_TRANSCRIPT"
+run_hook stop "$(printf '{"cwd":"%s","session_id":"sn","transcript_path":"%s"}' "$PROJ" "$FAKE_TRANSCRIPT")"
+assert_eq "(n) stop still exits 0 over the ceiling (advisory)" "0" "$HOOK_RC"
+recorded="$(python3 -c "import json; print(json.load(open('$PROJ/.eaos/$TID/state.json')).get('context',{}).get('last'))")"
+assert_eq "(n) last context recorded from the transcript" "170100" "$recorded"
+packet="$(cd "$PROJ" && python3 "$EAOS" status --packet "$TID")"
+assert_contains "(n) packet flags the ceiling" "$packet" "OVER CEILING"
+rm -rf "$PROJ"
+
 echo ""
 echo "========================================"
 echo "$pass_count passed, $fail_count failed"

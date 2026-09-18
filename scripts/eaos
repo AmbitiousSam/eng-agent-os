@@ -24,10 +24,12 @@ project lock (.eaos/.lock) — always acquired before any task lock to avoid dea
 import argparse
 import contextlib
 import datetime
+import fnmatch
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -49,6 +51,18 @@ DEFAULT_CONFIG = {
     # Next slot(s): open only after a loop-back has been recorded on the task (or to a
     # verifier). Planning a roster into them is refused — that is the zero-slack blunder.
     "reserved_loopback_spawns": 2,
+    # v4 (spec sections 5-9): which check categories a build unit must evidence before a
+    # READY handoff; board view budgets in tokens; advisory context ceiling for the lead;
+    # ignored-but-relevant paths that count toward the code snapshot.
+    "required_checks": ["test"],
+    "board_view_budget": {"lead": 1500, "unit": 1500, "checker": 2500, "packet": 800},
+    "max_context_tokens": 150000,
+    "snapshot_extra_paths": [],
+    # Untracked paths that are never product inputs even when a repo forgot to ignore
+    # them (a test run creating __pycache__ must not read as a code change).
+    "snapshot_ignore_globs": ["__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache",
+                              ".ruff_cache", "node_modules", ".tox", ".venv", "venv",
+                              ".DS_Store", "*.egg-info"],
 }
 VERIFIER_AGENT_RE = re.compile(r"verifier", re.I)
 CHECKER_ROLE_RE = re.compile(r"\b(security|review\w*|verif\w*|qa)\b", re.I)
@@ -1529,6 +1543,9 @@ def cmd_status(args):
     cfg_path = config_path()
     cfg = json.load(open(cfg_path, encoding="utf-8")) if os.path.isfile(cfg_path) \
         else DEFAULT_CONFIG
+    if getattr(args, "packet", False):
+        print_packet(task_id, state, cfg)
+        sys.exit(0)
 
     print(f"Task: {state['id']} — {state['title']}")
     print(f"CURRENT: {current}" if current else "CURRENT: (none)")
@@ -2183,6 +2200,566 @@ def cmd_session(args):
         print(tid)
     sys.exit(0)
 
+# ---------- v4 runtime: snapshot, check evidence, units, board, writer lease, packet ----------
+# Spec: docs/specs/2026-09-17-eaos-v4-architecture.md sections 5-9. Every contract here is
+# a boundary the model cannot talk its way through; none of it prescribes reasoning.
+
+SNAPSHOT_EXCLUDE_DIRS = (".eaos",)
+CHECK_CATEGORIES = ("test", "lint", "type", "build", "rehearsal", "other")
+BOARD_TYPES = ("claim", "finding", "decision", "risk", "question")
+BOARD_STATUSES = ("active", "resolved", "disproven", "superseded")
+BOARD_SUMMARY_MAX = 400
+UNIT_KINDS = ("build", "read", "check")
+
+def _run(cmd, cwd=None, timeout=None, shell=False):
+    return subprocess.run(cmd, cwd=cwd or os.getcwd(), shell=shell, capture_output=True,
+                          text=True, timeout=timeout)
+
+def _git(*args):
+    try:
+        r = _run(["git", *args])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+def compute_snapshot(cfg=None):
+    """Identity of the PRODUCT inputs (v4 R-2): HEAD, tracked modifications, and untracked
+    non-ignored files. Excluded: .eaos/ (runtime records: recording a check must never
+    change the identity of the code it verified) and everything git ignores (build
+    outputs, caches). Ignored-but-relevant paths are opted in via config
+    snapshot_extra_paths. Not a git repo -> hashes the tree the same way with HEAD='nogit'."""
+    h = hashlib.sha256()
+    head = (_git("rev-parse", "HEAD") or "nogit").strip()
+    h.update(head.encode())
+    diff = _git("diff", "HEAD", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS])
+    if diff is None:
+        diff = _git("diff", "--", ".", *[f":!{d}" for d in SNAPSHOT_EXCLUDE_DIRS]) or ""
+    h.update(diff.encode("utf-8", "surrogatepass"))
+    untracked = _git("ls-files", "--others", "--exclude-standard") or ""
+    ignore = (cfg or {}).get("snapshot_ignore_globs") or DEFAULT_CONFIG["snapshot_ignore_globs"]
+
+    def noise(p):
+        parts = p.split("/")
+        return any(fnmatch.fnmatch(part, g) for part in parts for g in ignore)
+    paths = [p for p in untracked.splitlines()
+             if p and not any(p == d or p.startswith(d + "/") for d in SNAPSHOT_EXCLUDE_DIRS)
+             and not noise(p)]
+    extra = (cfg or {}).get("snapshot_extra_paths") or []
+    for p in sorted(set(paths) | {e for e in extra if os.path.isfile(e)}):
+        h.update(f"\n--{p}--\n".encode())
+        try:
+            with open(p, "rb") as f:
+                h.update(f.read())
+        except OSError:
+            h.update(b"<unreadable>")
+    return h.hexdigest()
+
+def snapshot_short(s):
+    return (s or "")[:12]
+
+def _scope_overlaps(a, b):
+    """Deterministic scope match (P-5): empty scope is global and overlaps everything; two
+    glob lists overlap when any pattern of one matches any pattern of the other."""
+    if not a or not b:
+        return True
+    for x in a:
+        for y in b:
+            if x == y or fnmatch.fnmatch(x, y) or fnmatch.fnmatch(y, x):
+                return True
+            xp, yp = x.rstrip("*/"), y.rstrip("*/")
+            if xp and yp and (xp.startswith(yp) or yp.startswith(xp)):
+                return True
+    return False
+
+def _split_scope(text):
+    return [s.strip() for s in (text or "").split(",") if s.strip()]
+
+def board_of(state):
+    return state.setdefault("board", {"revision": 0, "entries": {}})
+
+def units_of(state):
+    return state.setdefault("units", {})
+
+# ---- snapshot
+
+def cmd_snapshot(args):
+    cfg = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+    print(compute_snapshot(cfg))
+    sys.exit(0)
+
+# ---- check evidence (R-2, R-3)
+
+def cmd_check(args):
+    cfg = load_config()
+    if args.category not in CHECK_CATEGORIES:
+        die(f"check: --category must be one of {', '.join(CHECK_CATEGORIES)}", 2)
+    if bool(args.cmd) == bool(args.unavailable):
+        die("check: need exactly one of --cmd '<shell>' or --unavailable --reason '<why>'", 2)
+    if args.unavailable and not args.reason:
+        die("check: --unavailable requires --reason", 2)
+    with task_lock(args.id):
+        state = load_state(args.id)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
+        ts = now_iso()
+        seq = next_seq(state)
+        rec = {"seq": seq, "category": args.category, "unit": args.unit, "at": ts,
+               "cwd": os.getcwd()}
+        if args.unavailable:
+            rec.update({"unavailable": True, "reason": args.reason, "exit": None,
+                        "snapshot_before": compute_snapshot(cfg), "snapshot_after": None,
+                        "stable": None, "output_ref": None, "cmd": None})
+            passed = True
+        else:
+            before = compute_snapshot(cfg)
+            try:
+                r = _run(args.cmd, shell=True, timeout=args.timeout)
+                out = (r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr else "")
+                code = r.returncode
+            except subprocess.TimeoutExpired:
+                out, code = f"[timeout after {args.timeout}s]", 124
+            after = compute_snapshot(cfg)
+            cdir = os.path.join(task_dir(args.id), "checks")
+            os.makedirs(cdir, exist_ok=True)
+            ref = os.path.join(cdir, f"{seq:04d}-{args.category}.log")
+            with open(ref, "w", encoding="utf-8") as f:
+                f.write(f"$ {args.cmd}\n# cwd={os.getcwd()} exit={code} "
+                        f"snapshot_before={before} snapshot_after={after}\n\n{out}")
+            rec.update({"cmd": args.cmd, "exit": code, "snapshot_before": before,
+                        "snapshot_after": after, "stable": before == after,
+                        "output_ref": os.path.relpath(ref), "unavailable": False,
+                        "reason": None})
+            passed = code == 0
+        state.setdefault("checks", []).append(rec)
+        save_state(args.id, state)
+        warroom_log(args.id, f"[{ts}] CHECK category={args.category} "
+                              f"{'UNAVAILABLE' if args.unavailable else 'exit=' + str(rec['exit'])} "
+                              f"snapshot={snapshot_short(rec['snapshot_before'])} "
+                              f"stable={rec['stable']} unit={args.unit or '-'}")
+    if args.unavailable:
+        print(f"OK: check {args.category} recorded UNAVAILABLE ({args.reason})")
+        sys.exit(0)
+    if not rec["stable"]:
+        print(f"CHECK exit={rec['exit']} but SNAPSHOT-UNSTABLE: the command changed product "
+              f"files ({snapshot_short(rec['snapshot_before'])} -> "
+              f"{snapshot_short(rec['snapshot_after'])}); this evidence binds to neither "
+              f"snapshot. Commit or revert the change, then re-run the check")
+        sys.exit(1)
+    print(f"{'OK' if passed else 'CHECK FAILED'}: {args.category} exit={rec['exit']} "
+          f"snapshot={snapshot_short(rec['snapshot_before'])} log={rec['output_ref']}")
+    sys.exit(0 if passed else 1)
+
+def valid_evidence(state, category, current_snapshot):
+    """R-2/R-3: passing, stable, and bound to the CURRENT snapshot (any change invalidates
+    all evidence); or an explicit unavailable record made against the current snapshot."""
+    for rec in reversed(state.get("checks", [])):
+        if rec.get("category") != category:
+            continue
+        if rec.get("unavailable"):
+            if rec.get("snapshot_before") == current_snapshot:
+                return rec
+            continue
+        if (rec.get("exit") == 0 and rec.get("stable")
+                and rec.get("snapshot_after") == current_snapshot):
+            return rec
+    return None
+
+# ---- units (P-1, P-4, R-4)
+
+def cmd_unit(args):
+    cfg = load_config()
+    with task_lock(args.id):
+        state = load_state(args.id)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
+        units = units_of(state)
+        ts = now_iso()
+        if args.unit_cmd == "start":
+            if args.kind not in UNIT_KINDS:
+                die(f"unit start: --kind must be one of {', '.join(UNIT_KINDS)}", 2)
+            uid = f"U-{len(units) + 1:03d}"
+            units[uid] = {"id": uid, "title": args.title, "kind": args.kind,
+                          "scope": _split_scope(args.scope), "status": "active",
+                          "board_rev": board_of(state)["revision"],
+                          "snapshot": compute_snapshot(cfg), "started": ts,
+                          "seq": next_seq(state), "reconciled": [], "stale_by": None,
+                          "handoff": None}
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] UNIT START {uid} kind={args.kind} "
+                                  f"board_rev={units[uid]['board_rev']} "
+                                  f"snapshot={snapshot_short(units[uid]['snapshot'])} "
+                                  f"scope={units[uid]['scope']} title={args.title}")
+            print(uid)
+            sys.exit(0)
+
+        u = units.get(args.uid)
+        if not u:
+            die(f"no such unit: {args.uid}", 2)
+        if args.unit_cmd == "handoff":
+            if bool(args.ready) == bool(args.blocked):
+                die("unit handoff: need exactly one of --ready or --blocked --reason", 2)
+            if args.blocked:
+                if not args.reason:
+                    die("unit handoff: --blocked requires --reason", 2)
+                u["status"] = "blocked"
+                u["handoff"] = {"kind": "blocked", "reason": args.reason, "at": ts,
+                                "seq": next_seq(state)}
+                save_state(args.id, state)
+                warroom_log(args.id, f"[{ts}] UNIT HANDOFF {args.uid} BLOCKED: {args.reason}")
+                print(f"OK: {args.uid} handed off as BLOCKED (requesting help) — this is not a "
+                      f"success claim")
+                sys.exit(0)
+            # --ready: evidence + reconciliation + not stale
+            problems = []
+            if u.get("status") == "stale":
+                problems.append(f"unit is STALE (invalidated by {u.get('stale_by')}); "
+                                f"reconcile it first")
+            current = compute_snapshot(cfg)
+            for cat in cfg.get("required_checks", []):
+                if u.get("kind") != "build":
+                    break
+                if not valid_evidence(state, cat, current):
+                    problems.append(f"no valid '{cat}' evidence for snapshot "
+                                    f"{snapshot_short(current)} (passing, stable, bound to "
+                                    f"the current code; or an explicit --unavailable record)")
+            pending = unreconciled_entries(state, u)
+            if pending:
+                problems.append("unreconciled in-scope board changes since this unit "
+                                f"started: {[e['id'] for e in pending]} — "
+                                f"`eaos board reconcile` each")
+            if problems:
+                print("HANDOFF REFUSED (not ready):")
+                for p in problems:
+                    print(f"  - {p}")
+                print("A blocked handoff is always available: --blocked --reason '<why>'")
+                sys.exit(1)
+            u["status"] = "ready"
+            u["handoff"] = {"kind": "ready", "at": ts, "snapshot": current,
+                            "seq": next_seq(state)}
+            w = state.get("writer")
+            if w and w.get("unit") == args.uid:
+                state["writer"] = None
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] UNIT HANDOFF {args.uid} READY snapshot="
+                                  f"{snapshot_short(current)}")
+            print(f"OK: {args.uid} READY for review at snapshot {snapshot_short(current)}")
+            sys.exit(0)
+
+def unreconciled_entries(state, unit):
+    out = []
+    for e in board_of(state)["entries"].values():
+        if e["revision"] <= unit.get("board_rev", 0):
+            continue
+        if e.get("unit") == unit["id"]:
+            continue
+        if e.get("status") != "active":
+            continue
+        if e["id"] in unit.get("reconciled", []):
+            continue
+        if not _scope_overlaps(e.get("scope"), unit.get("scope")):
+            continue
+        out.append(e)
+    return out
+
+# ---- board (section 5, P-2, P-3)
+
+def cmd_board(args):
+    cfg = load_config()
+    if args.board_cmd == "view":
+        state = load_state(args.id)
+        rc = print_board_view(state, cfg, args)
+        sys.exit(rc)
+    if args.board_cmd == "diff":
+        state = load_state(args.id)
+        scope = _split_scope(args.scope)
+        if args.unit:
+            u = units_of(state).get(args.unit)
+            if not u:
+                die(f"no such unit: {args.unit}", 2)
+            scope = scope or u.get("scope")
+            since = args.since if args.since is not None else u.get("board_rev", 0)
+        else:
+            since = args.since or 0
+        hits = [e for e in board_of(state)["entries"].values()
+                if e["revision"] > since and _scope_overlaps(e.get("scope"), scope)]
+        hits.sort(key=lambda e: e["revision"])
+        print(f"board changes since revision {since}: {len(hits)}")
+        for e in hits:
+            print(_fmt_entry(e))
+        sys.exit(0)
+
+    with task_lock(args.id):
+        state = load_state(args.id)
+        if state.get("status") == "blocked":
+            ensure_not_blocked(state, args.id)
+        board = board_of(state)
+        ts = now_iso()
+        if args.board_cmd == "post":
+            if args.type not in BOARD_TYPES:
+                die(f"board post: --type must be one of {', '.join(BOARD_TYPES)}", 2)
+            summary = (args.summary or "").strip()
+            if not summary:
+                die("board post: --summary is required", 2)
+            if len(summary) > BOARD_SUMMARY_MAX:
+                die(f"board post: summary is {len(summary)} chars; the limit is "
+                    f"{BOARD_SUMMARY_MAX}. Put the detail in an artifact and pass --ref", 2)
+            severity = None
+            if args.type == "risk":
+                severity = resolve_risk_severity(args.severity, None, summary)
+                if severity is None:
+                    die("board post: a risk needs --severity low|medium|high|blocking", 2)
+            fp = compute_request_fingerprint(
+                "board post", args.id,
+                [("type", args.type), ("ref", args.ref), ("scope", args.scope),
+                 ("severity", severity), ("unit", args.unit), ("supersedes", args.supersedes),
+                 ("invalidates", args.invalidates)], body_text=summary)
+            idempotency_guard(state, args.idempotency_key, fp, "board post", args.id)
+            eid = f"B-{len(board['entries']) + 1:03d}"
+            board["revision"] += 1
+            unit = units_of(state).get(args.unit) if args.unit else None
+            entry = {"id": eid, "revision": board["revision"], "type": args.type,
+                     "summary": summary, "ref": args.ref,
+                     "scope": _split_scope(args.scope) or (unit.get("scope") if unit else []),
+                     "severity": severity,
+                     "author": args.author or (args.unit or "lead"), "unit": args.unit,
+                     "snapshot": compute_snapshot(cfg), "status": "active", "at": ts,
+                     "seq": next_seq(state), "supersedes": args.supersedes,
+                     "invalidates": args.invalidates}
+            board["entries"][eid] = entry
+            if args.supersedes:
+                t = board["entries"].get(args.supersedes)
+                if not t:
+                    die(f"board post: --supersedes {args.supersedes}: no such entry", 2)
+                t["status"] = "superseded"
+                t["revision"] = board["revision"]
+            if args.invalidates:
+                target_u = units_of(state).get(args.invalidates)
+                target_e = board["entries"].get(args.invalidates)
+                if target_u:
+                    if target_u.get("status") in ("active", "ready"):
+                        target_u["status"] = "stale"
+                        target_u["stale_by"] = eid
+                elif target_e:
+                    target_e["status"] = "disproven"
+                    target_e["revision"] = board["revision"]
+                else:
+                    die(f"board post: --invalidates {args.invalidates}: no such unit or "
+                        f"entry", 2)
+            if args.type == "risk" and severity in RISK_REGISTERED_SEVERITIES:
+                state.setdefault("open_risks", []).append(
+                    {"msg": eid, "at": ts, "seq": next_seq(state),
+                     "from": entry["author"], "severity": severity})
+            out = f"OK: {eid} posted (rev {board['revision']})"
+            idempotency_record(state, args.idempotency_key, fp, out)
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] BOARD {eid} {args.type} rev={board['revision']} "
+                                  f"by={entry['author']} sev={severity or '-'} "
+                                  f"scope={entry['scope']} "
+                                  f"{'supersedes=' + args.supersedes + ' ' if args.supersedes else ''}"
+                                  f"{'invalidates=' + args.invalidates + ' ' if args.invalidates else ''}"
+                                  f":: {summary}")
+            print(out)
+            sys.exit(0)
+        if args.board_cmd == "resolve":
+            e = board["entries"].get(args.eid)
+            if not e:
+                die(f"no such entry: {args.eid}", 2)
+            if args.status not in BOARD_STATUSES:
+                die(f"board resolve: --status must be one of {', '.join(BOARD_STATUSES)}", 2)
+            e["status"] = args.status
+            board["revision"] += 1
+            e["revision"] = board["revision"]
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] BOARD {args.eid} -> {args.status} "
+                                  f"rev={board['revision']}")
+            print(f"OK: {args.eid} {args.status} (rev {board['revision']})")
+            sys.exit(0)
+        if args.board_cmd == "reconcile":
+            u = units_of(state).get(args.uid)
+            if not u:
+                die(f"no such unit: {args.uid}", 2)
+            e = board["entries"].get(args.entry)
+            if not e:
+                die(f"no such entry: {args.entry}", 2)
+            if args.disposition not in ("acted", "not-applicable"):
+                die("board reconcile: --disposition acted|not-applicable", 2)
+            if args.disposition == "not-applicable" and not args.note:
+                die("board reconcile: not-applicable requires --note '<why>'", 2)
+            if args.entry not in u["reconciled"]:
+                u["reconciled"].append(args.entry)
+            if u.get("stale_by") == args.entry:
+                u["stale_by"] = None
+                u["status"] = "active"
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] RECONCILE {args.uid} {args.entry} "
+                                  f"{args.disposition}{(' — ' + args.note) if args.note else ''}")
+            print(f"OK: {args.uid} reconciled {args.entry} ({args.disposition})")
+            sys.exit(0)
+
+def _fmt_entry(e):
+    sev = f" [{e['severity']}]" if e.get("severity") else ""
+    ref = f" -> {e['ref']}" if e.get("ref") else ""
+    st = "" if e.get("status") == "active" else f" ({e['status']})"
+    return f"{e['id']} r{e['revision']} {e['type']}{sev} by {e['author']}{st}: {e['summary']}{ref}"
+
+def print_board_view(state, cfg, args):
+    """Deterministic, budgeted (5.3). Blocking risks and active decisions first; a view
+    NEVER silently omits a blocking fact — if those alone exceed the budget it says so
+    and exits 3."""
+    budgets = cfg.get("board_view_budget", {})
+    budget = args.budget or budgets.get(args.for_, 1500)
+    scope = _split_scope(args.scope)
+    if args.unit:
+        u = units_of(state).get(args.unit)
+        if u and not scope:
+            scope = u.get("scope")
+    entries = [e for e in board_of(state)["entries"].values()
+               if e.get("status") == "active" and _scope_overlaps(e.get("scope"), scope)]
+    if args.for_ == "checker":
+        entries = [e for e in entries if e["type"] != "claim"]   # K-1: no maker claims
+
+    def tier(e):
+        if e["type"] == "risk" and e.get("severity") == "blocking":
+            return 0
+        if e["type"] == "decision":
+            return 1
+        if e["type"] == "risk" and e.get("severity") == "high":
+            return 2
+        return 3
+    entries.sort(key=lambda e: (tier(e), -e["revision"]))
+    lines, used, omitted_blocking, omitted_other = [], 0, [], 0
+    for e in entries:
+        line = _fmt_entry(e)
+        cost = len(line) // 4 + 1
+        if used + cost > budget:
+            if tier(e) <= 2:
+                omitted_blocking.append(e["id"])
+            else:
+                omitted_other += 1
+            continue
+        lines.append(line)
+        used += cost
+    print(f"board view for={args.for_} rev={board_of(state)['revision']} "
+          f"budget={budget} used~{used} scope={scope or 'all'}")
+    for ln in lines:
+        print(ln)
+    rc = 0
+    if omitted_blocking:
+        print(f"INCOMPLETE: {len(omitted_blocking)} blocking/decision entries omitted: "
+              f"{omitted_blocking} — retrieve them; this view is not complete")
+        rc = 3
+    if omitted_other:
+        print(f"({omitted_other} more entries not shown; raise --budget or narrow --scope)")
+    return rc
+
+# ---- writer lease (R-5)
+
+def cmd_writer(args):
+    with task_lock(args.id):
+        state = load_state(args.id)
+        w = state.get("writer")
+        ts = now_iso()
+        if args.writer_cmd == "claim":
+            if args.unit not in units_of(state):
+                die(f"no such unit: {args.unit}", 2)
+            if w and w.get("unit") != args.unit:
+                print(f"WRITER HELD by {w['unit']} since {w['at']} (scope {w.get('scope')}) — "
+                      f"one writer per workspace; wait for its handoff or work read-only")
+                sys.exit(1)
+            state["writer"] = {"unit": args.unit, "at": ts, "seq": next_seq(state),
+                               "scope": _split_scope(args.scope)}
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] WRITER {args.unit} claimed scope="
+                                  f"{state['writer']['scope']}")
+            print(f"OK: writer lease -> {args.unit}")
+            sys.exit(0)
+        if args.writer_cmd == "release":
+            if not w or w.get("unit") != args.unit:
+                die(f"writer release: lease not held by {args.unit}", 1)
+            state["writer"] = None
+            save_state(args.id, state)
+            warroom_log(args.id, f"[{ts}] WRITER {args.unit} released")
+            print(f"OK: writer lease released by {args.unit}")
+            sys.exit(0)
+        print(f"writer: {w['unit'] if w else '(none)'}")
+        sys.exit(0)
+
+# ---- context record (C-4, advisory)
+
+def cmd_ctx(args):
+    with task_lock(args.id):
+        state = load_state(args.id)
+        c = state.setdefault("context", {"last": 0, "max": 0, "at": None, "samples": 0})
+        c["last"] = int(args.tokens)
+        c["max"] = max(c["max"], int(args.tokens))
+        c["at"] = now_iso()
+        c["samples"] = c.get("samples", 0) + 1
+        save_state(args.id, state)
+    cfg = load_config()
+    ceiling = int(cfg.get("max_context_tokens", 0) or 0)
+    if ceiling and int(args.tokens) > ceiling:
+        print(f"CONTEXT {int(args.tokens):,} > ceiling {ceiling:,} — reset at the next unit "
+              f"boundary: `eaos status --packet` then a fresh session (advisory: the host "
+              f"cannot be forced to reset)")
+        sys.exit(3)
+    print(f"OK: context {int(args.tokens):,} recorded")
+    sys.exit(0)
+
+# ---- continuation packet (C-2)
+
+def print_packet(task_id, state, cfg):
+    print("=== EAOS CONTINUATION PACKET ===")
+    print(f"task: {task_id} — {state.get('title')}   kind={state.get('kind')} "
+          f"stakes={state.get('stakes')} status={state.get('status')}")
+    head = (_git("rev-parse", "--short", "HEAD") or "nogit").strip()
+    print(f"code: HEAD {head}, snapshot {snapshot_short(compute_snapshot(cfg))}, "
+          f"board rev {board_of(state)['revision']}")
+    criteria = state.get("criteria", {})
+    if criteria:
+        print("criteria:")
+        for k, v in list(criteria.items())[:15]:
+            print(f"  {k}: {v['verdict']}")
+        if len(criteria) > 15:
+            print(f"  (+{len(criteria) - 15} more)")
+    units = units_of(state)
+    live = [u for u in units.values() if u.get("status") in ("active", "stale", "ready")]
+    if live:
+        print("units:")
+        for u in live[:8]:
+            print(f"  {u['id']} {u['status']} {u['kind']} scope={u.get('scope')} :: {u['title']}")
+    w = state.get("writer")
+    print(f"writer: {w['unit'] if w else '(none)'}")
+    class A:  # minimal args shim for the lead view
+        for_ = "lead"; budget = int(cfg.get("board_view_budget", {}).get("packet", 800))
+        scope = None; unit = None
+    print_board_view(state, cfg, A)
+    checks = state.get("checks", [])[-3:]
+    if checks:
+        print("latest checks:")
+        for c in checks:
+            what = "UNAVAILABLE" if c.get("unavailable") else f"exit={c.get('exit')}"
+            print(f"  {c['category']} {what} snapshot={snapshot_short(c.get('snapshot_before'))}"
+                  f" stable={c.get('stable')}")
+    ok, reason, manual, unresolved = require_status(state)
+    print(f"verdict: {'all recorded criteria pass' if ok else reason}"
+          + (f"; conditional: {manual + unresolved}" if (manual or unresolved) else ""))
+    ctx = state.get("context") or {}
+    ceiling = int(cfg.get("max_context_tokens", 0) or 0)
+    if ctx.get("last"):
+        flag = " OVER CEILING" if ceiling and ctx["last"] > ceiling else ""
+        print(f"context: last {ctx['last']:,} max {ctx['max']:,}{flag}")
+    nxt = []
+    for u in units.values():
+        if u.get("status") == "stale":
+            nxt.append(f"reconcile {u['id']} (invalidated by {u.get('stale_by')})")
+    for u in units.values():
+        if u.get("status") == "ready":
+            nxt.append(f"check {u['id']} (ready for review)")
+    if not ok:
+        nxt.append("resolve: " + reason)
+    print("next: " + ("; ".join(nxt) if nxt else "continue the current unit"))
+    print("=== END PACKET ===")
+
 # ---------- argparse wiring ----------
 
 def build_parser():
@@ -2293,6 +2870,8 @@ def build_parser():
     p_verify.set_defaults(func=cmd_verify)
 
     p_status = sub.add_parser("status")
+    p_status.add_argument("--packet", action="store_true",
+                          help="bounded continuation packet for a fresh context (v4 C-2)")
     p_status.add_argument("id", nargs="?", default=None,
                           help="task id; defaults to .eaos/CURRENT if omitted")
     p_status.set_defaults(func=cmd_status)
@@ -2321,6 +2900,92 @@ def build_parser():
         sp.add_argument("--session", default=None,
                         help="host session id; defaults to $EAOS_SESSION_ID")
         sp.set_defaults(func=cmd_session)
+
+    # ---- v4 verbs
+    p_snap = sub.add_parser("snapshot")
+    p_snap.set_defaults(func=cmd_snapshot)
+
+    p_check = sub.add_parser("check")
+    p_check.add_argument("id")
+    p_check.add_argument("--category", required=True)
+    p_check.add_argument("--cmd", default=None)
+    p_check.add_argument("--unavailable", action="store_true")
+    p_check.add_argument("--reason", default=None)
+    p_check.add_argument("--unit", default=None)
+    p_check.add_argument("--timeout", type=int, default=1800)
+    p_check.set_defaults(func=cmd_check)
+
+    p_unit = sub.add_parser("unit")
+    unit_sub = p_unit.add_subparsers(dest="unit_cmd", required=True)
+    p_us = unit_sub.add_parser("start")
+    p_us.add_argument("id")
+    p_us.add_argument("--title", required=True)
+    p_us.add_argument("--kind", default="build")
+    p_us.add_argument("--scope", default=None, help="comma-separated path globs")
+    p_us.set_defaults(func=cmd_unit)
+    p_uh = unit_sub.add_parser("handoff")
+    p_uh.add_argument("id")
+    p_uh.add_argument("uid")
+    p_uh.add_argument("--ready", action="store_true")
+    p_uh.add_argument("--blocked", action="store_true")
+    p_uh.add_argument("--reason", default=None)
+    p_uh.set_defaults(func=cmd_unit)
+
+    p_board = sub.add_parser("board")
+    board_sub = p_board.add_subparsers(dest="board_cmd", required=True)
+    p_bp = board_sub.add_parser("post")
+    p_bp.add_argument("id")
+    p_bp.add_argument("--type", required=True)
+    p_bp.add_argument("--summary", required=True)
+    p_bp.add_argument("--ref", default=None)
+    p_bp.add_argument("--scope", default=None)
+    p_bp.add_argument("--severity", default=None)
+    p_bp.add_argument("--unit", default=None)
+    p_bp.add_argument("--author", default=None)
+    p_bp.add_argument("--supersedes", default=None)
+    p_bp.add_argument("--invalidates", default=None, help="a unit id or an entry id")
+    p_bp.add_argument("--idempotency-key", dest="idempotency_key", default=None)
+    p_bp.set_defaults(func=cmd_board)
+    p_br = board_sub.add_parser("resolve")
+    p_br.add_argument("id")
+    p_br.add_argument("eid")
+    p_br.add_argument("--status", required=True)
+    p_br.set_defaults(func=cmd_board)
+    p_bv = board_sub.add_parser("view")
+    p_bv.add_argument("id")
+    p_bv.add_argument("--for", dest="for_", default="lead", choices=["lead", "unit", "checker"])
+    p_bv.add_argument("--scope", default=None)
+    p_bv.add_argument("--budget", type=int, default=None)
+    p_bv.add_argument("--unit", default=None)
+    p_bv.set_defaults(func=cmd_board)
+    p_bd = board_sub.add_parser("diff")
+    p_bd.add_argument("id")
+    p_bd.add_argument("--since", type=int, default=None)
+    p_bd.add_argument("--scope", default=None)
+    p_bd.add_argument("--unit", default=None)
+    p_bd.set_defaults(func=cmd_board)
+    p_bc = board_sub.add_parser("reconcile")
+    p_bc.add_argument("id")
+    p_bc.add_argument("uid")
+    p_bc.add_argument("--entry", required=True)
+    p_bc.add_argument("--disposition", required=True)
+    p_bc.add_argument("--note", default=None)
+    p_bc.set_defaults(func=cmd_board)
+
+    p_writer = sub.add_parser("writer")
+    writer_sub = p_writer.add_subparsers(dest="writer_cmd", required=True)
+    for name in ("claim", "release", "show"):
+        sp = writer_sub.add_parser(name)
+        sp.add_argument("id")
+        if name != "show":
+            sp.add_argument("--unit", required=True)
+        sp.add_argument("--scope", default=None)
+        sp.set_defaults(func=cmd_writer)
+
+    p_ctx = sub.add_parser("ctx")
+    p_ctx.add_argument("id")
+    p_ctx.add_argument("--tokens", type=int, required=True)
+    p_ctx.set_defaults(func=cmd_ctx)
 
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("id")

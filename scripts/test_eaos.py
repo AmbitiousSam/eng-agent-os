@@ -2220,5 +2220,233 @@ class TestExperimentOutcome(unittest.TestCase):
         self.assertEqual((r["outcome"], r["cost"]), ("ceiling", "improved"))     # cost still reported
 
 
+class V4Case(EaosTestCase):
+    """v4 runtime verbs run inside a real git repo (snapshots need one)."""
+
+    def setUp(self):
+        super().setUp()
+        subprocess.run(["git", "init", "-q"], cwd=self.cwd, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=self.cwd, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=self.cwd, check=True)
+        with open(os.path.join(self.cwd, "app.py"), "w") as f:
+            f.write("X = 1\n")
+        subprocess.run(["git", "add", "."], cwd=self.cwd, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=self.cwd, check=True)
+        self.init()
+        self.tid = self.new_task()
+        run(self.cwd, "phase", self.tid, "DESIGN")
+
+    def unit(self, title="work", kind="build", scope="app.py"):
+        rc, out, err = run(self.cwd, "unit", "start", self.tid, "--title", title,
+                           "--kind", kind, "--scope", scope)
+        self.assertEqual(rc, 0, err)
+        return out.strip()
+
+    def snap(self):
+        return run(self.cwd, "snapshot")[1].strip()
+
+    def edit(self, text="Y = 2\n"):
+        with open(os.path.join(self.cwd, "app.py"), "a") as f:
+            f.write(text)
+
+
+class TestSnapshot(V4Case):
+    def test_product_edits_change_it_and_runtime_records_do_not(self):
+        a = self.snap()
+        run(self.cwd, "append", self.tid, "--from", "a", "--to", "b", "--type", "STATUS",
+            "--body", "runtime record only")
+        self.assertEqual(self.snap(), a)                       # .eaos/ excluded
+        os.makedirs(os.path.join(self.cwd, "__pycache__"))
+        with open(os.path.join(self.cwd, "__pycache__", "x.pyc"), "w") as f:
+            f.write("cache")
+        self.assertEqual(self.snap(), a)                       # cache noise excluded
+        self.edit()
+        self.assertNotEqual(self.snap(), a)                    # tracked modification
+        with open(os.path.join(self.cwd, "new.py"), "w") as f:
+            f.write("N = 1\n")
+        b = self.snap()
+        self.assertNotEqual(b, a)                              # untracked product file
+        self.assertEqual(len(a), 64)
+
+
+class TestCheckEvidence(V4Case):
+    def test_passing_check_binds_to_snapshot_and_handoff_needs_it(self):
+        u = self.unit()
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 1)
+        self.assertIn("no valid 'test' evidence", out)
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "test",
+                           "--cmd", "python3 -c 'import sys; sys.exit(0)'", "--unit", u)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("snapshot=", out)
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 0, out)
+        log = os.listdir(os.path.join(self.cwd, ".eaos", self.tid, "checks"))
+        self.assertEqual(len(log), 1)
+
+    def test_failing_check_records_and_refuses_ready(self):
+        u = self.unit()
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "false")
+        self.assertEqual(rc, 1)
+        self.assertIn("CHECK FAILED", out)
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 1)
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--blocked",
+                           "--reason", "tests fail on the ledger path")
+        self.assertEqual(rc, 0)
+        self.assertIn("not a success claim", out)
+
+    def test_code_change_after_check_invalidates_all_evidence(self):
+        u = self.unit()
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.edit()
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 1)
+        self.assertIn("no valid 'test' evidence", out)
+
+    def test_check_that_mutates_product_files_is_unstable(self):
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "lint",
+                           "--cmd", "echo Z=3 >> app.py")
+        self.assertEqual(rc, 1)
+        self.assertIn("SNAPSHOT-UNSTABLE", out)
+
+    def test_explicit_unavailable_counts_with_reason(self):
+        u = self.unit()
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--unavailable")
+        self.assertEqual(rc, 2)
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--unavailable",
+                           "--reason", "no test suite exists in this repository")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
+
+    def test_read_units_need_no_evidence(self):
+        u = self.unit(kind="read")
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
+
+
+class TestBoard(V4Case):
+    def post(self, *extra, summary="a finding", type_="finding"):
+        return run(self.cwd, "board", "post", self.tid, "--type", type_, "--summary", summary,
+                   *extra)
+
+    def test_summary_cap_and_ref(self):
+        rc, out, err = self.post(summary="x" * 401)
+        self.assertEqual(rc, 2)
+        self.assertIn("400", err)
+        rc, out, err = self.post(summary="x" * 400, *["--ref", "notes.md"])
+        self.assertEqual(rc, 0, err)
+
+    def test_runtime_metadata_is_generated(self):
+        self.post()
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            e = json.load(f)["board"]["entries"]["B-001"]
+        for k in ("id", "revision", "author", "status", "snapshot", "seq", "at"):
+            self.assertIn(k, e)
+        self.assertEqual((e["revision"], e["status"], e["author"]), (1, "active", "lead"))
+
+    def test_invalidates_marks_unit_stale_and_reconcile_clears(self):
+        u = self.unit()
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        r = self.unit(title="research", kind="read")
+        rc, out, err = self.post("--unit", r, "--invalidates", u,
+                                 summary="refunds use a different ledger")
+        self.assertEqual(rc, 0, err)
+        rc, out, err = run(self.cwd, "unit", "handoff", self.tid, u, "--ready")
+        self.assertEqual(rc, 1)
+        self.assertIn("STALE", out)
+        self.assertIn("unreconciled", out)
+        rc, out, err = run(self.cwd, "board", "reconcile", self.tid, u, "--entry", "B-001",
+                           "--disposition", "not-applicable")
+        self.assertEqual(rc, 2)                                   # needs a note
+        rc, out, err = run(self.cwd, "board", "reconcile", self.tid, u, "--entry", "B-001",
+                           "--disposition", "acted")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
+
+    def test_out_of_scope_changes_do_not_block(self):
+        u = self.unit(scope="app.py")
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.post("--scope", "docs/**", summary="docs only")
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u, "--ready")[0], 0)
+
+    def test_diff_since_unit_start(self):
+        u = self.unit(scope="app.py")
+        self.post(summary="in scope", *["--scope", "app.py"])
+        self.post(summary="elsewhere", *["--scope", "docs/**"])
+        rc, out, err = run(self.cwd, "board", "diff", self.tid, "--unit", u)
+        self.assertEqual(rc, 0)
+        self.assertIn("B-001", out)
+        self.assertNotIn("B-002", out)
+
+    def test_view_never_silently_omits_blocking(self):
+        for i in range(4):
+            self.post("--severity", "blocking", type_="risk", summary=f"blocking {i} " + "x" * 200)
+        rc, out, err = run(self.cwd, "board", "view", self.tid, "--for", "checker",
+                           "--budget", "60")
+        self.assertEqual(rc, 3)
+        self.assertIn("INCOMPLETE", out)
+        rc, out, err = run(self.cwd, "board", "view", self.tid, "--for", "checker",
+                           "--budget", "5000")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("INCOMPLETE", out)
+
+    def test_checker_view_excludes_maker_claims(self):
+        self.post(type_="claim", summary="I implemented it correctly")
+        self.post(type_="decision", summary="tags stored lowercase")
+        rc, out, err = run(self.cwd, "board", "view", self.tid, "--for", "checker")
+        self.assertNotIn("B-001", out)
+        self.assertIn("B-002", out)
+        rc, out, err = run(self.cwd, "board", "view", self.tid, "--for", "lead")
+        self.assertIn("B-001", out)
+
+    def test_risk_posts_register_for_verdict(self):
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified",
+            "--evidence", "green")
+        self.post("--severity", "high", type_="risk", summary="crash-loop")
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 1)
+        run(self.cwd, "verify", self.tid, "--criterion", "R-B-001", "--verdict", "blocked",
+            "--evidence", "product decision pending")
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 3)
+
+    def test_supersedes_and_resolve(self):
+        self.post(type_="decision", summary="old")
+        self.post(type_="decision", summary="new", *["--supersedes", "B-001"])
+        rc, out, err = run(self.cwd, "board", "view", self.tid)
+        self.assertNotIn("B-001", out)
+        run(self.cwd, "board", "resolve", self.tid, "B-002", "--status", "resolved")
+        rc, out, err = run(self.cwd, "board", "view", self.tid)
+        self.assertNotIn("B-002", out)
+
+
+class TestWriterLease(V4Case):
+    def test_one_writer_and_release_on_ready(self):
+        u1, u2 = self.unit("a"), self.unit("b")
+        self.assertEqual(run(self.cwd, "writer", "claim", self.tid, "--unit", u1)[0], 0)
+        rc, out, err = run(self.cwd, "writer", "claim", self.tid, "--unit", u2)
+        self.assertEqual(rc, 1)
+        self.assertIn("WRITER HELD", out)
+        run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.assertEqual(run(self.cwd, "unit", "handoff", self.tid, u1, "--ready")[0], 0)
+        self.assertEqual(run(self.cwd, "writer", "claim", self.tid, "--unit", u2)[0], 0)
+
+
+class TestPacketAndContext(V4Case):
+    def test_packet_is_bounded_and_names_next_action(self):
+        u = self.unit()
+        run(self.cwd, "board", "post", self.tid, "--type", "decision", "--summary", "utc only")
+        rc, out, err = run(self.cwd, "status", "--packet", self.tid)
+        self.assertEqual(rc, 0, err)
+        for s in ("CONTINUATION PACKET", "snapshot", u, "B-001", "next:"):
+            self.assertIn(s, out)
+        self.assertLess(len(out), 6000)
+
+    def test_context_ceiling_is_advisory_exit_3(self):
+        self.assertEqual(run(self.cwd, "ctx", self.tid, "--tokens", "1000")[0], 0)
+        rc, out, err = run(self.cwd, "ctx", self.tid, "--tokens", "160000")
+        self.assertEqual(rc, 3)
+        self.assertIn("advisory", out)
+        rc, out, err = run(self.cwd, "status", "--packet", self.tid)
+        self.assertIn("OVER CEILING", out)
+
+
 if __name__ == "__main__":
     unittest.main()

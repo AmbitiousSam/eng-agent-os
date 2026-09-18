@@ -3,8 +3,10 @@
 **What they do:** three Claude Code hooks — `PreToolUse` (matcher `Task|Agent`),
 `PostToolUse` (matcher `Bash`) and `Stop` — all invoke `scripts/eaos-hook.sh`, which
 shells out to the real `eaos` CLI so `eaos spawn` and `eaos audit` happen without the
-model choosing to run them, and so the session is bound to its task the moment
-`eaos task new` runs. Evidence: three real runs measured bookkeeping bypass (spawns/appends
+model choosing to run them, so the session is bound to its task the moment
+`eaos task new` runs, and (v4, advisory) so the lead's context size is recorded from the
+transcript at every stop: `eaos ctx` stores it, `eaos status --packet` shows OVER CEILING,
+and nothing blocks — a hook cannot force a fresh context (v4 spec C-4, section 11). Evidence: three real runs measured bookkeeping bypass (spawns/appends
 skipped mid-flow) even with prompt-level instructions to run them.
 
 **Accelerator, not authority (spec §11).** The eaos runtime/adapter wrapper stays the

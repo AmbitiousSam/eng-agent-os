@@ -78,6 +78,7 @@ except Exception:
 
 tool_name = str(d.get("tool_name") or "")
 cwd = str(d.get("cwd") or "")
+transcript_path = str(d.get("transcript_path") or "")
 tool_use_id = str(d.get("tool_use_id") or "")
 session_id = str(d.get("session_id") or "")
 # only a CLI-valid session id is forwarded; anything else = "no session id" (fallback rules)
@@ -133,6 +134,7 @@ fields = {
     "STOP_HOOK_ACTIVE": "true" if stop_hook_active else "false",
     "IDEM_KEY": idem_key,
     "NEW_TASK_ID": new_task_id,
+    "TRANSCRIPT_PATH": transcript_path,
 }
 for k, v in fields.items():
     print(f"{k}={shlex.quote(v)}")
@@ -197,6 +199,35 @@ stop)
   [ "${STOP_HOOK_ACTIVE:-false}" = "true" ] && exit 0  # prevent a block/retry loop
   current_task="$(resolve_task)" || exit 0
   [ -n "$current_task" ] || exit 0
+
+  # v4 C-4 (advisory): record the lead's latest context size from the transcript the
+  # host hands us. Measurement only — a hook cannot force a fresh context, so nothing
+  # here blocks; the number shows up in `eaos status --packet` and `eaos ctx` says when
+  # the ceiling is passed. Fail open on any parse problem.
+  if [ -n "${TRANSCRIPT_PATH:-}" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+    ctx_tokens="$(python3 - "$TRANSCRIPT_PATH" <<'PYCTX' 2>/dev/null
+import json, sys
+last = 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    m = d.get("message") if isinstance(d.get("message"), dict) else None
+    if d.get("type") == "assistant" and m and m.get("usage"):
+        u = m["usage"]
+        n = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+        if n:
+            last = n
+print(last)
+PYCTX
+)"
+    case "${ctx_tokens:-}" in
+      ''|*[!0-9]*) ;;
+      0) ;;
+      *) (cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" ctx "$current_task" --tokens "$ctx_tokens" >/dev/null 2>&1) ;;
+    esac
+  fi
 
   out="$(cd "$cwd" 2>/dev/null && python3 "$EAOS_BIN" audit "$current_task" 2>&1)"
   rc=$?

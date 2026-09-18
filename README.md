@@ -1,71 +1,58 @@
 # Engineering Agentic OS (EAOS)
 
-A portable "operating system" that runs software engineering work as a **collaborating team
-of AI agents** — architect, developer, QA, security, devops, SRE, reviewer — coordinated by an
-orchestrator that runs a real engineering loop (understand → plan → build → review → test →
-ship → stabilize) and pulls in only the agents a task actually needs.
+EAOS v4 is a small layer you bolt onto a coding agent. The model leads. EAOS supplies the
+three things a model cannot give itself and enforces them at boundaries:
 
-![EAOS two-loop architecture](loop-arch.png)
-*The Claude Code standard/complex path: human at the gates, orchestrator's higher loop,
-isolated workers, shared `.eaos/` state, independent verifier.*
+1. **Working state that outlives a context** — a typed, revisioned board on disk with
+   budgeted views, so a fresh context or a parallel worker sees what its siblings found.
+2. **A check made without the maker's reasoning** — a clean-context checker that grades
+   criteria and risks with executed evidence.
+3. **Evidence and verdicts that cannot be talked into existence** — a runtime whose exit
+   codes are binding: check evidence bound to a code snapshot, canonical verdicts, risks
+   that must be answered, one writer per workspace, an audit.
+
+It constrains actions and evidence, not the model's reasoning. There is no persona roster
+and no phase pipeline. Role knowledge lives in short checklists loaded on demand.
+
+Status: v4 is implemented and under evaluation. The design is
+`docs/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until experiments E0/E1 report);
+v3 is preserved at tag `e0-baseline`. Evidence so far is in `evals/`; read
+`docs/EVAL-PROTOCOL.md` before believing any claim here, including this one.
 
 ## Quickstart (Claude Code)
 
 ```bash
 git clone https://github.com/AmbitiousSam/eng-agent-os.git && cd eng-agent-os
-./setup.sh                  # installs command, personas, skills, config, eaos CLI into ~/.claude
-./scripts/eaos-doctor.sh    # verify (or: make doctor)
+./setup.sh                       # installs the front door, 3 boundary agents, checklists, runtime
+./scripts/install-eaos-hooks.sh  # optional: spawn budget, audit and context size without model cooperation
+./scripts/eaos-doctor.sh         # verify
 ```
 
-Restart Claude Code, then from inside any project:
+`setup.sh` also removes what earlier EAOS versions installed (personas, the agency-agents
+library, skills, playbooks). Restart Claude Code, then from inside any project:
 
 ```
 /agentic-os Add per-API-key rate limiting to our public REST API
 ```
 
-That's the whole interface. It runs autonomously and stops only at defined human gates:
-blocking product decisions, deadlocks, and destructive actions (push / deploy / migrate / spend).
+Follow-ups are plain messages. On a fresh context for an existing task, run
+`~/.claude/eaos/bin/eaos status --packet` first.
 
-## The trust model
+## What is in the repo
 
-- **Bookkeeping is code, not prose.** The `eaos` runtime CLI enforces spawn budgets, loop-back
-  ceilings, gate checks, and an evidence-mandatory Definition-of-Done table with **binding exit
-  codes** — EAOS cannot produce an unconditional completion claim while required criteria
-  remain unverified; blocked and manual-confirmation states are reported explicitly.
-- **Maker is never checker.** A fresh-context verifier grades every criterion with evidence
-  before a standard/complex task can complete.
-- **Everything is auditable files.** War room, artifacts, decisions, and memory live in
-  `./.eaos/` in your project — resumable across sessions and tools.
-- **Judgment stays human-steerable.** Routing, design convergence, and review quality are
-  prompts you can read and edit; the CLI does bookkeeping, not thinking.
-
-## Where it runs
-
-| Tool | What you get |
+| Path | What |
 |---|---|
-| **Claude Code** | The full team: isolated subagents, parallelism by complexity, model tiers, fresh verifier |
-| **Cursor / Codex / Windsurf-Devin / any AGENTS.md tool** | [Solo mode](adapters/solo-mode.md): one grounded, disciplined agent + the `eaos` CLI's DoD enforcement — honest about what degrades ([why](adapters/README.md)) |
+| `commands/agentic-os.md` | the front door, about 80 lines, loaded once |
+| `agents/eaos-{builder,reader,checker}.md` | the three boundaries, tool-scoped, no personas |
+| `checklists/` | intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
+| `scripts/eaos` | the runtime: task, unit, board, check, snapshot, writer, verify, report, audit, episode, session, ctx |
+| `scripts/eaos-hook.sh` | Claude Code hooks: spawn budget, session binding, audit, context measurement |
+| `orchestrator/routing.yaml` | stakes dial, budgets, adapter capability levels |
+| `docs/specs/` | v4 draft, v3 (frozen, superseded on freeze only) |
+| `evals/` | protocol, pre-registrations, measured results |
 
-The `.eaos/` state and the `eaos` CLI port everywhere; start a task in Claude Code, resume it
-in Cursor.
+## Trust model
 
-## Documentation
-
-**[📖 The wiki](https://github.com/AmbitiousSam/eng-agent-os/wiki)** — Quickstart, Architecture,
-Runtime CLI, IDE Adapters, Playbooks & Routing, Memory & State, Trust & Evals, Customizing.
-
-In-repo: [`AGENT_OS.md`](AGENT_OS.md) (full design doc) · [`ROADMAP.md`](ROADMAP.md) ·
-[`adapters/`](adapters/) · [`docs/EVAL-PROTOCOL.md`](docs/EVAL-PROTOCOL.md) ·
-[`CUSTOMIZE.md`](CUSTOMIZE.md) · [`RUN.md`](RUN.md)
-
-## Develop / validate
-
-```bash
-make doctor      # install + project readiness
-make test        # shell syntax + structural validator + eval fixture + CLI unit tests
-```
-
-## License / attribution
-
-Builds on and installs [`agency-agents`](https://github.com/msitarzewski/agency-agents) (MIT).
-EAOS is the coordination layer; agency-agents supplies extra specialist personas.
+Exit codes are rules; prompt text is a wish. A criterion that did not execute is never
+`verified`. A high risk without a verdict blocks completion. Evidence is void the moment the
+code changes. What a hook cannot enforce is labelled advisory in `routing.yaml > adapters`.

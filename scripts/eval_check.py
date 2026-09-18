@@ -38,6 +38,10 @@ def read_yaml(path):
 
 
 def main():
+    if not os.path.exists(FIXTURE):
+        print("OK — no routing fixture: v4 has no agent roster or playbooks to route to. The v3 "
+              "fixture is archived at evals/archive/v3-routing-golden.yaml for the e0-baseline tag.")
+        sys.exit(0)
     if not os.path.isfile(FIXTURE):
         print(f"MISSING: {FIXTURE}", file=sys.stderr)
         sys.exit(1)

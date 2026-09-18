@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# eaos-doctor.sh — verify EAOS is installed and the current project is ready to run /agentic-os.
+# eaos-doctor.sh — verify EAOS v4 is installed and the current project is ready.
 # Exit 0 = healthy, 1 = problems. Safe to run anytime.
 set -uo pipefail
 
@@ -10,122 +10,74 @@ pass() { printf "  \033[0;32m✓\033[0m %s\n" "$*"; }
 bad()  { printf "  \033[0;31m✗\033[0m %s\n" "$*"; fail=1; }
 note() { printf "  \033[0;33m!\033[0m %s\n" "$*"; }
 
-echo "EAOS doctor"
+echo "EAOS doctor (v4)"
 echo "========================================"
 
 echo "Installation (~/.claude):"
-[ -d "$CLAUDE_DIR" ] && pass "$CLAUDE_DIR exists" || bad "$CLAUDE_DIR missing — run ./setup.sh"
-for f in commands/agentic-os.md \
-         eaos/routing.yaml eaos/protocol.md eaos/loop.md eaos/orchestrator.md \
-         eaos/memory-seed/index.md eaos/adapters/solo-mode.md eaos/bin/eaos; do
+for f in commands/agentic-os.md eaos/routing.yaml eaos/bin/eaos eaos/bin/eaos-hook.sh \
+         eaos/adapters/solo-mode.md agents/eaos-builder.md agents/eaos-reader.md agents/eaos-checker.md; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
-# eaos runtime CLI: functional smoke check (mechanical bookkeeping degrades to prompt-only
-# enforcement without it — see commands/agentic-os.md > Runtime CLI).
-if [ -e "$CLAUDE_DIR/eaos/bin/eaos" ]; then
-  if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help >/dev/null 2>&1; then
-    pass "eaos CLI runs (~/.claude/eaos/bin/eaos --help)"
-  else
-    bad "eaos CLI present but failed to run — run ./setup.sh"
-  fi
-fi
-# required agents installed
-# orchestrator is NOT a spawnable agent — it's the role /agentic-os adopts on the main
-# session; its spec lives at ~/.claude/eaos/orchestrator.md (checked above).
-# Derived from the repo's agents/*.md basenames (excluding README) so this list can never
-# drift out of sync with setup.sh's own verify step — both compute the same set, live.
-need_agents="$(cd "$EAOS_DIR/agents" 2>/dev/null && ls *.md 2>/dev/null | sed 's/\.md$//' | grep -v '^README$')"
-if [ -z "$need_agents" ]; then
-  bad "could not derive the agent list from $EAOS_DIR/agents — run the doctor from a full eng-agent-os checkout"
-else
-  miss=""
-  count=0
-  for a in $need_agents; do
-    count=$((count + 1))
-    [ -e "$CLAUDE_DIR/agents/$a.md" ] || miss="$miss $a"
-  done
-  [ -z "$miss" ] && pass "all $count EAOS worker personas installed" || bad "missing agents:$miss — run ./setup.sh"
-fi
-# skills
-# Derived from the repo's skills/ dirs so this list can never drift (same pattern as agents).
-need_skills="$(cd "$EAOS_DIR/skills" 2>/dev/null && ls -d */ 2>/dev/null | sed 's:/$::')"
-if [ -z "$need_skills" ]; then
-  bad "could not derive the skill list from $EAOS_DIR/skills — run the doctor from a full eng-agent-os checkout"
-else
-  sk_ok=1; for s in $need_skills; do
-    [ -e "$CLAUDE_DIR/skills/$s/SKILL.md" ] || sk_ok=0; done
-  [ "$sk_ok" = 1 ] && pass "EAOS skills installed" || bad "some skills missing — run ./setup.sh"
-fi
-# Optional ecosystem integrations (never failures — EAOS runs bare)
-echo "Optional integrations:"
-if ls "$CLAUDE_DIR"/agents/agency-*.md >/dev/null 2>&1; then
-  pass "agency-agents personas (delegate pool)"
-else
-  note "agency-agents not installed (optional) — EAOS works standalone"
-fi
-if command -v codegraph >/dev/null 2>&1; then
-  pass "codegraph CLI on PATH (GROUND uses it where .codegraph/ exists)"
-else
-  note "codegraph not installed (optional) — GROUND falls back to grep. Install (any OS, needs node): npx @colbymchenry/codegraph"
-fi
-if command -v rtk >/dev/null 2>&1; then
-  pass "rtk on PATH (command-output compression; run 'rtk init -g' once if not hooked)"
-else
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) note "rtk not installed (optional) — Windows: use WSL for full hook support, or the release zip (filters only): github.com/rtk-ai/rtk/releases" ;;
-    *) note "rtk not installed (optional) — curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh   (then: rtk init -g)" ;;
-  esac
-fi
-if ls "$CLAUDE_DIR"/plugins 2>/dev/null | grep -qi ponytail || [ -d "$HOME/.config/ponytail" ]; then
-  pass "ponytail detected (minimal-code discipline reinforced at host level)"
-else
-  note "ponytail not detected (optional) — the ladder is baked into the developer persona anyway. /plugin install ponytail@ponytail"
+if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help >/dev/null 2>&1; then pass "eaos CLI runs"; else bad "eaos CLI present but failed to run — run ./setup.sh"; fi
+if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help 2>/dev/null | grep -q "board"; then pass "eaos CLI is v4 (board/unit/check verbs)"; else bad "eaos CLI predates v4 — run ./setup.sh"; fi
+
+# checklists derived from the repo so this list never drifts
+need_cl="$(cd "$EAOS_DIR/checklists" 2>/dev/null && ls *.md 2>/dev/null | sed 's/\.md$//')"
+if [ -z "$need_cl" ]; then bad "could not derive the checklist list from $EAOS_DIR/checklists — run the doctor from a full checkout"; else
+  miss=""; n=0
+  for c in $need_cl; do n=$((n + 1)); [ -e "$CLAUDE_DIR/eaos/checklists/$c.md" ] || miss="$miss $c"; done
+  [ -z "$miss" ] && pass "all $n checklists installed" || bad "missing checklists:$miss — run ./setup.sh"
 fi
 
-# models.mode=inherit means installed personas must not carry model: (setup.sh strips it)
-mm="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/orchestrator/routing.yaml" 2>/dev/null)"
-if [ "${mm:-inherit}" = "inherit" ] && [ -n "$need_agents" ]; then
-  stale_model=""
-  for a in $need_agents; do
-    grep -q "^model:" "$CLAUDE_DIR/agents/$a.md" 2>/dev/null && stale_model="$stale_model $a"
-  done
-  if [ -z "$stale_model" ]; then pass "models.mode=inherit: no persona overrides the session model"; else
-    bad "models.mode=inherit but installed personas still pin a model:$stale_model — re-run ./setup.sh"; fi
+# front door budget and model pin
+if [ -e "$CLAUDE_DIR/commands/agentic-os.md" ]; then
+  est=$(( $(wc -c < "$CLAUDE_DIR/commands/agentic-os.md") / 4 ))
+  [ "$est" -le 2000 ] && pass "front door ~$est tokens (budget 2000)" || bad "front door ~$est tokens exceeds the 2000-token bootstrap budget"
+  grep -q "^model:" "$CLAUDE_DIR/commands/agentic-os.md" && bad "front door pins a model — run ./setup.sh" || pass "front door pins no model"
 fi
+
+# models.mode=inherit: installed boundary agents must not pin a model
+mm="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/orchestrator/routing.yaml" 2>/dev/null)"
+if [ "${mm:-inherit}" = "inherit" ]; then
+  pinned=""
+  for a in eaos-builder eaos-reader eaos-checker; do grep -q "^model:" "$CLAUDE_DIR/agents/$a.md" 2>/dev/null && pinned="$pinned $a"; done
+  [ -z "$pinned" ] && pass "models.mode=inherit: no agent pins a model" || bad "agents pin a model under inherit:$pinned — run ./setup.sh"
+fi
+
+echo "Leftovers from earlier versions:"
+left=0
+n_agency="$(ls "$CLAUDE_DIR"/agents/agency-*.md 2>/dev/null | wc -l | tr -d ' ')"
+[ "$n_agency" = 0 ] && pass "no agency-agents personas installed" || { bad "$n_agency agency-agents personas still installed (listed on every turn) — run ./setup.sh"; left=1; }
+for a in architect developer verifier requirements-analyst security-reviewer; do
+  [ -e "$CLAUDE_DIR/agents/$a.md" ] && { bad "v3 persona still installed: agents/$a.md — run ./setup.sh"; left=1; }
+done
+for f in eaos/protocol.md eaos/loop.md eaos/orchestrator.md eaos/playbooks; do
+  [ -e "$CLAUDE_DIR/$f" ] && { bad "v3 file still installed: ~/.claude/$f — run ./setup.sh"; left=1; }
+done
+[ "$left" = 0 ] && pass "no v3 orchestration files remain"
 
 echo "Hook accelerators (M-007, optional):"
-if [ -e "$CLAUDE_DIR/eaos/bin/eaos-hook.sh" ]; then
-  pass "eaos-hook.sh installed (~/.claude/eaos/bin/eaos-hook.sh)"
-else
-  note "eaos-hook.sh not installed — run ./setup.sh"
-fi
 if [ -f "$CLAUDE_DIR/settings.json" ] && grep -q "eaos-hook.sh" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-  pass "hooks wired into settings.json — spawn/audit run without model cooperation"
-  if ! grep -q "eaos-hook.sh.* posttool" "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-    note "settings.json predates session-scoped hooks (no PostToolUse entry) — re-run" \
-         "./scripts/install-eaos-hooks.sh so each session binds to ITS task (docs/HOOKS.md)"
-  fi
+  pass "hooks wired into settings.json — spawn/audit/context run without model cooperation"
+  grep -q "eaos-hook.sh.* posttool" "$CLAUDE_DIR/settings.json" 2>/dev/null || \
+    note "no PostToolUse entry — re-run ./scripts/install-eaos-hooks.sh so each session binds to ITS task"
 else
-  note "hooks not wired into settings.json (optional) — prompt+audit only until you" \
-       "opt in with: ./scripts/install-eaos-hooks.sh"
+  note "hooks not wired (optional) — opt in with: ./scripts/install-eaos-hooks.sh"
 fi
 
 echo "Project readiness (cwd):"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  pass "inside a git repo ($(git rev-parse --show-toplevel 2>/dev/null))"
+  pass "inside a git repo ($(git rev-parse --show-toplevel 2>/dev/null)) — snapshots and check evidence work"
   if git check-ignore .eaos >/dev/null 2>&1; then pass ".eaos/ is gitignored"; else
     note ".eaos/ not gitignored — add '.eaos/' to .gitignore so runtime state isn't committed"; fi
 else
-  note "not a git repo — GROUND can still map, but git history/blame won't be available"
+  note "not a git repo — snapshots fall back to hashing the tree; check evidence still binds"
 fi
 
 echo "Repo self-check:"
 if command -v python3 >/dev/null 2>&1; then
-  if python3 "$EAOS_DIR/scripts/validate-eaos.py" >/dev/null 2>&1; then
-    pass "validate-eaos.py: repo internally consistent"
-  else
-    bad "validate-eaos.py reported errors — run: python3 scripts/validate-eaos.py"
-  fi
+  if python3 "$EAOS_DIR/scripts/validate-eaos.py" >/dev/null 2>&1; then pass "validate-eaos.py: repo internally consistent"; else
+    bad "validate-eaos.py reported errors — run: python3 scripts/validate-eaos.py"; fi
 else
   note "python3 not found — skipping structural validation"
 fi

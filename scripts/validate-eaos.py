@@ -2,13 +2,14 @@
 """
 validate-eaos.py — mechanical consistency checks for the Engineering Agentic OS.
 
-Turns the OS's "operating contract" into enforced invariants so the repo doesn't drift:
-  - routing.yaml parses and has the required shape
-  - every agent persona has valid frontmatter (name/description/model/tools)
-  - every agent referenced by routing (always/conditional/model tiers) actually exists
-  - every template referenced by skills/command/agents exists on disk
-  - every skill has a SKILL.md with frontmatter
-  - the slash command and core files are present
+v4 layout (docs/specs/2026-09-17-eaos-v4-architecture.md):
+  - the front door is small (bootstrap budget) and pins no model
+  - exactly the three boundary agent definitions exist, with tool scopes and no model pin
+  - every checklist the front door names exists with name/description/sources frontmatter
+  - routing.yaml parses and carries stakes / budget / models.mode / adapters
+  - the templates the front door and checklists reference exist
+  - nothing installed references the deleted v3 machinery (playbooks, personas, loop)
+  - mechanisms.yaml keeps the section-12 schema
 
 Exit code 0 = all good; 1 = problems found. No third-party deps required
 (falls back to a tiny YAML-frontmatter parser if PyYAML is missing).
@@ -61,16 +62,68 @@ def exists(rel):
     return os.path.exists(os.path.join(ROOT, rel))
 
 # ---------- 1. core files / dirs present ----------
-REQUIRED = [
-    "commands/agentic-os.md", "orchestrator/routing.yaml", "orchestrator/protocol.md",
-    "orchestrator/loop.md", "orchestrator/orchestrator.md", "setup.sh", "README.md",
-]
+REQUIRED = ["commands/agentic-os.md", "orchestrator/routing.yaml", "setup.sh", "README.md",
+            "scripts/eaos", "scripts/eaos-hook.sh", "mechanisms.yaml",
+            "docs/EVAL-PROTOCOL.md", "adapters/solo-mode.md"]
 for r in REQUIRED:
     (ok if exists(r) else err)(f"required file: {r}")
-for d in ["agents", "skills", "templates", "orchestrator"]:
+for d in ["agents", "checklists", "templates", "adapters"]:
     (ok if os.path.isdir(os.path.join(ROOT, d)) else err)(f"required dir: {d}/")
 
-# ---------- 2. routing.yaml parses + shape ----------
+# ---------- 2. front door: bootstrap budget, no model pin, follow-up rule ----------
+cmd_rel = "commands/agentic-os.md"
+if exists(cmd_rel):
+    text = read(os.path.join(ROOT, cmd_rel))
+    est = len(text) // 4
+    (ok if est <= 2000 else err)(f"{cmd_rel}: bootstrap ~{est} tokens (budget 2000, v4 C-1)")
+    fm = frontmatter(text) or {}
+    (ok if "model" not in fm else err)(f"{cmd_rel}: frontmatter pins no model (inherit)")
+    (ok if "Do not re-run this command" in text else err)(
+        f"{cmd_rel}: states that follow-ups never re-expand the command")
+    (ok if "status --packet" in text else err)(f"{cmd_rel}: names the continuation packet")
+
+# ---------- 3. boundary agent definitions: exactly three, scoped tools, no personas ----------
+BOUNDARIES = {"eaos-builder": {"Write", "Edit"}, "eaos-reader": set(), "eaos-checker": set()}
+agent_dir = os.path.join(ROOT, "agents")
+found = sorted(f[:-3] for f in os.listdir(agent_dir) if f.endswith(".md") and f != "README.md") \
+    if os.path.isdir(agent_dir) else []
+extra = [a for a in found if a not in BOUNDARIES]
+missing = [a for a in BOUNDARIES if a not in found]
+(ok if not extra else err)(f"agents/: only the three boundaries (extra: {extra})" if extra
+                          else "agents/: only the three boundary definitions")
+(ok if not missing else err)(f"agents/: all three boundaries present (missing: {missing})"
+                            if missing else "agents/: builder, reader, checker present")
+for a in found:
+    fm = frontmatter(read(os.path.join(agent_dir, a + ".md"))) or {}
+    for field in ["name", "description", "tools"]:
+        (ok if field in fm else err)(f"agents/{a}.md: frontmatter has '{field}'")
+    (ok if "model" not in fm else err)(f"agents/{a}.md: no model pin (inherit)")
+    tools = fm.get("tools")
+    tools = set(tools) if isinstance(tools, list) else set(str(tools or "").strip("[]").replace(" ", "").split(","))
+    must_lack = BOUNDARIES.get(a, set())
+    if a in ("eaos-reader", "eaos-checker"):
+        (ok if not ({"Write", "Edit"} & tools) else err)(f"agents/{a}.md: read-only tool scope")
+    else:
+        (ok if must_lack <= tools else err)(f"agents/{a}.md: can write and edit")
+    body_text = read(os.path.join(agent_dir, a + ".md")).lower()
+    (ok if "you are a senior" not in body_text and "personality" not in body_text else err)(
+        f"agents/{a}.md: no persona costume")
+
+# ---------- 4. checklists named by the front door exist, with frontmatter ----------
+CHECKLISTS = ["intake", "build", "research", "review", "security", "test-adequacy", "verdict",
+              "deploy-rehearsal", "operability", "incident", "reporting"]
+for c in CHECKLISTS:
+    rel = f"checklists/{c}.md"
+    if not exists(rel):
+        err(f"{rel}: missing (named by the front door)")
+        continue
+    fm = frontmatter(read(os.path.join(ROOT, rel))) or {}
+    for field in ["name", "description", "sources"]:
+        (ok if field in fm else err)(f"{rel}: frontmatter has '{field}'")
+    lines = read(os.path.join(ROOT, rel)).count("\n")
+    (ok if lines <= 90 else warn)(f"{rel}: {lines} lines (on-demand checklists stay short)")
+
+# ---------- 5. routing.yaml parses + v4 shape ----------
 routing = None
 rp = os.path.join(ROOT, "orchestrator/routing.yaml")
 if exists("orchestrator/routing.yaml"):
@@ -80,222 +133,47 @@ if exists("orchestrator/routing.yaml"):
         try:
             routing = load_yaml(read(rp))
             ok("routing.yaml parses")
-            for key in ["agents", "models", "autonomy"]:
+            for key in ["models", "stakes", "budget", "loop_guard", "adapters"]:
                 (ok if key in routing else err)(f"routing.yaml has '{key}'")
-            if "agents" in routing:
-                for key in ["always", "conditional"]:
-                    (ok if key in routing["agents"] else err)(f"routing.agents has '{key}'")
+            (ok if routing.get("models", {}).get("mode") in ("inherit", "tiered") else err)(
+                "routing.models.mode is inherit|tiered")
+            for lvl in routing.get("stakes", {}).get("levels", []):
+                (ok if lvl in routing["stakes"] else err)(f"routing.stakes defines '{lvl}'")
+            for key in ["max_agent_spawns_per_task", "reserved_verifier_spawns",
+                        "reserved_loopback_spawns", "required_checks", "max_context_tokens"]:
+                (ok if key in routing.get("budget", {}) else err)(f"routing.budget has '{key}'")
+            ad = routing.get("adapters", {}).get("claude-code", {})
+            LEVELS = {"enforced", "measured", "advisory", "planned", "manual"}
+            bad = {k: v for k, v in ad.items() if v not in LEVELS}
+            (ok if ad and not bad else err)(f"routing.adapters.claude-code uses capability levels only ({bad or 'ok'})")
         except Exception as e:
             err(f"routing.yaml failed to parse: {e}")
 
-# ---------- 3. agent personas: frontmatter + collect names ----------
-agent_names = {}
-agent_dir = os.path.join(ROOT, "agents")
-persona_files = []
-if os.path.isdir(agent_dir):
-    persona_files = [os.path.join("agents", f) for f in os.listdir(agent_dir)
-                     if f.endswith(".md") and f.lower() != "readme.md"]
-persona_files.append("orchestrator/orchestrator.md")
-
-for rel in sorted(persona_files):
-    if not exists(rel):
-        continue
-    fm = frontmatter(read(os.path.join(ROOT, rel)))
-    if not fm:
-        err(f"{rel}: missing YAML frontmatter")
-        continue
-    for field in ["name", "description", "model", "tools"]:
-        if not fm.get(field):
-            err(f"{rel}: frontmatter missing '{field}'")
-    name = fm.get("name")
-    if name:
-        if name in agent_names:
-            err(f"duplicate agent name '{name}' ({rel} and {agent_names[name]})")
-        agent_names[name] = rel
-if agent_names:
-    ok(f"{len(agent_names)} agent personas with valid frontmatter: {', '.join(sorted(agent_names))}")
-
-# ---------- 4. routing agents must exist as personas ----------
-def check_names(names, where):
-    for n in names:
-        (ok if n in agent_names else err)(f"routing '{where}' references agent '{n}' → persona exists")
-
-if routing and "agents" in routing:
-    check_names(routing["agents"].get("always", []), "always")
-    check_names(list(routing["agents"].get("conditional", {}).keys()), "conditional")
-if routing and isinstance(routing.get("models", {}), dict):
-    by_agent = routing["models"].get("by_agent", {})
-    check_names(list(by_agent.keys()), "models.by_agent")
-
-# ---------- 4b. playbooks: frontmatter + roster agents exist + registry files exist ----------
-playbook_names = set()
-pb_dir = os.path.join(ROOT, "playbooks")
-if os.path.isdir(pb_dir):
-    for f in sorted(os.listdir(pb_dir)):
-        if not f.endswith(".md") or f.lower() == "readme.md":
-            continue
-        rel = f"playbooks/{f}"
-        fm = frontmatter(read(os.path.join(ROOT, rel)))
-        if not fm:
-            err(f"{rel}: missing YAML frontmatter")
-            continue
-        for field in ["name", "trigger", "roster", "phases"]:
-            if fm.get(field) is None:
-                err(f"{rel}: frontmatter missing '{field}'")
-        if fm.get("name"):
-            playbook_names.add(fm["name"])
-        roster = fm.get("roster") or {}
-        if isinstance(roster, dict):
-            for grp in ("always", "optional"):
-                for n in roster.get(grp, []) or []:
-                    (ok if n in agent_names else err)(f"{rel}: roster '{grp}' agent '{n}' → persona exists")
-    if playbook_names:
-        ok(f"{len(playbook_names)} playbooks with valid frontmatter: {', '.join(sorted(playbook_names))}")
-# registry in routing.yaml must point at real playbook files
-if routing and isinstance(routing.get("playbooks"), dict):
-    for pname, spec in routing["playbooks"].items():
-        f = (spec or {}).get("file")
-        if f:
-            (ok if exists(f) else err)(f"routing.playbooks['{pname}'].file exists: {f}")
-
-# ---------- 4c-pre. playbook phase-table participants must appear in that playbook's roster ----------
-# Catches the release/tech-writer class of bug: a phase table names a persona that was never
-# added to the roster block. "orchestrator" is exempt — it's the always-present narrator role,
-# never a roster-listed spawnable agent (see scripts/eaos-doctor.sh's own comment on this).
-# Requires a real YAML parse: the fallback frontmatter parser can't read nested roster lists,
-# so without PyYAML this check would flag every participant as un-rostered (false errors).
-if os.path.isdir(pb_dir) and HAVE_YAML:
-    for f in sorted(os.listdir(pb_dir)):
-        if not f.endswith(".md") or f.lower() == "readme.md":
-            continue
-        rel = f"playbooks/{f}"
-        text = read(os.path.join(ROOT, rel))
-        fm = frontmatter(text)
-        if not fm:
-            continue
-        roster = fm.get("roster") or {}
-        roster_names = set()
-        if isinstance(roster, dict):
-            for grp in ("always", "optional"):
-                roster_names.update(roster.get(grp, []) or [])
-        lines = text.splitlines()
-        header_idx = None
-        for i, line in enumerate(lines):
-            if line.strip().startswith("|") and "Participants" in line:
-                header_idx = i
-                break
-        if header_idx is None:
-            continue
-        cols = [c.strip() for c in lines[header_idx].strip().strip("|").split("|")]
-        if "Participants" not in cols:
-            continue
-        p_col = cols.index("Participants")
-        for line in lines[header_idx + 2:]:
-            if not line.strip().startswith("|"):
-                break
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) <= p_col:
-                continue
-            for name in re.findall(r"[a-z][a-z-]+", cells[p_col]):
-                if name in agent_names and name != "orchestrator" and name not in roster_names:
-                    err(f"{rel}: phase-table participant '{name}' not in roster (always/optional)")
-
-# ---------- 4c. command files: referenced personas/skills/playbooks must exist ----------
-cmd_dir = os.path.join(ROOT, "commands")
-if os.path.isdir(cmd_dir):
-    for f in sorted(os.listdir(cmd_dir)):
-        if not f.endswith(".md"):
-            continue
-        rel = f"commands/{f}"
-        text = read(os.path.join(ROOT, rel))
-        for m in re.finditer(r"agents/([\w-]+)\.md", text):
-            (ok if exists(f"agents/{m.group(1)}.md") else err)(f"{rel} references agents/{m.group(1)}.md → exists")
-        for m in re.finditer(r"skills/([\w-]+)/SKILL\.md", text):
-            (ok if exists(f"skills/{m.group(1)}/SKILL.md") else err)(f"{rel} references skills/{m.group(1)} → exists")
-        for m in re.finditer(r"playbooks/([\w-]+)\.md", text):
-            (ok if exists(f"playbooks/{m.group(1)}.md") else err)(f"{rel} references playbooks/{m.group(1)}.md → exists")
-
-# ---------- 5. skills have SKILL.md + frontmatter ----------
-skills_dir = os.path.join(ROOT, "skills")
-if os.path.isdir(skills_dir):
-    for d in sorted(os.listdir(skills_dir)):
-        sp = os.path.join(skills_dir, d, "SKILL.md")
-        rel = f"skills/{d}/SKILL.md"
-        if not os.path.isfile(sp):
-            err(f"skill '{d}' missing SKILL.md")
-            continue
-        fm = frontmatter(read(sp))
-        if not fm or not fm.get("name") or not fm.get("description"):
-            err(f"{rel}: frontmatter missing name/description")
-        else:
-            ok(f"skill ok: {d}")
-
-# ---------- 6. every referenced template exists ----------
-ref_sources = list(persona_files) + ["commands/agentic-os.md"]
-for d in (os.listdir(skills_dir) if os.path.isdir(skills_dir) else []):
-    ref_sources.append(f"skills/{d}/SKILL.md")
-referenced = set()
-for rel in ref_sources:
+# ---------- 6. templates referenced by the front door / checklists / agents exist ----------
+refs = set()
+for rel in [cmd_rel] + [f"checklists/{c}.md" for c in CHECKLISTS] + [f"agents/{a}.md" for a in found]:
     if exists(rel):
-        for m in re.finditer(r"templates/([\w-]+\.md)", read(os.path.join(ROOT, rel))):
-            referenced.add(m.group(1))
-for t in sorted(referenced):
+        refs |= set(re.findall(r"templates/([\w-]+\.md)", read(os.path.join(ROOT, rel))))
+for t in sorted(refs):
     (ok if exists(f"templates/{t}") else err)(f"referenced template exists: templates/{t}")
 
-# ---------- 6b. orphan templates: every templates/*.md should be referenced somewhere ----------
-templates_dir = os.path.join(ROOT, "templates")
-if os.path.isdir(templates_dir):
-    referenced_all = set(referenced)
-    skip_dirs = {".git", "vendor", "node_modules"}
-    for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        rel_dir = os.path.relpath(dirpath, ROOT)
-        if rel_dir == "templates" or rel_dir.startswith("templates" + os.sep):
-            continue
-        for fn in filenames:
-            if not (fn.endswith(".md") or fn.endswith(".yaml") or fn.endswith(".yml")):
-                continue
-            try:
-                t = read(os.path.join(dirpath, fn))
-            except Exception:
-                continue
-            for m in re.finditer(r"templates/([\w-]+\.md)", t):
-                referenced_all.add(m.group(1))
-    for fn in sorted(os.listdir(templates_dir)):
-        if not fn.endswith(".md") or fn.lower() == "readme.md":
-            continue
-        if fn in referenced_all:
-            ok(f"template referenced: templates/{fn}")
-        else:
-            warn(f"orphan template (zero references): templates/{fn}")
-
-# ---------- 7. path convention: agent runtime-state paths must use the .eaos/ prefix ----------
-# Canon (routing.yaml > runtime): '.eaos/<task-id>/artifacts/…' and '.eaos/memory/…'. A bare
-# 'artifacts/<' or 'memory/' path in an agent persona is A3-class drift — flag it. A line that
-# already contains '.eaos/' is assumed to be using the canonical form somewhere in it.
-for rel in sorted(persona_files):
+# ---------- 7. no installed file references the deleted v3 machinery ----------
+DELETED = ["playbooks/", "orchestrator/loop.md", "orchestrator/orchestrator.md",
+           "orchestrator/protocol.md", "agency-agents", "skills/"]
+for rel in [cmd_rel] + [f"agents/{a}.md" for a in found] + [f"checklists/{c}.md" for c in CHECKLISTS]:
     if not exists(rel):
         continue
-    for i, line in enumerate(read(os.path.join(ROOT, rel)).splitlines(), 1):
-        if "artifacts/<" in line and ".eaos/" not in line:
-            err(f"{rel}:{i}: bare 'artifacts/<' path — should be under '.eaos/<task-id>/artifacts/'")
-        if "memory/" in line and ".eaos/memory" not in line:
-            err(f"{rel}:{i}: bare 'memory/' path — should be '.eaos/memory/...'")
+    body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", read(os.path.join(ROOT, rel)), count=1, flags=re.S)
+    hits = [d for d in DELETED if d in body]   # frontmatter `sources` may name deleted files
+    (ok if not hits else err)(f"{rel}: no reference to removed v3 machinery" + (f" ({hits})" if hits else ""))
 
-# ---------- 8. setup.sh installs every commands/*.md ----------
-# (The old check on doctor's need_agents list was removed: doctor now derives the list
-# dynamically from agents/*.md, so the hardcoded-list drift class it guarded no longer exists.)
-setup_rel = "setup.sh"
-if os.path.isdir(cmd_dir) and exists(setup_rel):
-    # Match only non-comment lines so a commented-out install line doesn't pass.
-    setup_lines = [l for l in read(os.path.join(ROOT, setup_rel)).splitlines()
-                   if not l.lstrip().startswith("#")]
-    setup_text = "\n".join(setup_lines)
-    for f in sorted(os.listdir(cmd_dir)):
-        if not f.endswith(".md"):
-            continue
-        (ok if f"commands/{f}" in setup_text else err)(f"{setup_rel} installs commands/{f}")
-
+# ---------- 8. setup.sh installs the front door, the three agents and the checklists ----------
+if exists("setup.sh"):
+    st = read(os.path.join(ROOT, "setup.sh"))
+    for needle, label in [("commands/agentic-os.md", "front door"), ("checklists", "checklists"),
+                          ("agency-", "legacy agency-agents cleanup"), ("eaos-hook.sh", "hook script")]:
+        (ok if needle in st else err)(f"setup.sh handles {label}")
+    (ok if "AGENCY_REPO" not in st else err)("setup.sh no longer clones agency-agents")
 
 # ---------- 9. mechanisms.yaml shape (kernel law 6 / spec section 12) ----------
 # Validator checks SHAPE only; the evaluator determines effect.

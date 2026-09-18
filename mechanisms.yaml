@@ -134,3 +134,49 @@ mechanisms:
     owner: routing
     evaluation_due_after_runs: 5
     removal_condition: no cost reduction without quality loss across build-class eval runs
+
+  # ---- v4 (docs/specs/2026-09-17-eaos-v4-architecture.md) — all instrumented, none validated
+  - id: M-011
+    name: board-working-state
+    reliability: execution
+    status: instrumented
+    motivating_evidence: [2026-09-09 run — orchestrator wrote 87% of output tokens as war-room prose; Cognition 2026 open problem on sibling discovery propagation]
+    expected_effect: fresh contexts and parallel readers consume each other's findings without a relay; budgeted views cap context
+    primary_metric: relevant_discoveries_consumed
+    guardrails: [tokens_per_task, rework_from_stale_assumptions]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 4
+    removal_condition: E1 arm C does not beat arm B on the discovery task after confirmation
+  - id: M-012
+    name: snapshot-bound-check-evidence
+    reliability: execution
+    status: instrumented
+    motivating_evidence: [2026-09-09 run — 35 criteria verified statically; first real deploy rejected]
+    expected_effect: a READY handoff cannot rest on checks that ran against other code
+    primary_metric: false_completion_rate
+    guardrails: [handoff_refusal_rate]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 4
+    removal_condition: refusals are all false positives across evaluated runs
+  - id: M-013
+    name: bounded-bootstrap-and-packet
+    reliability: execution
+    status: instrumented
+    motivating_evidence: [evals/results/2026-09-09-context-measurement.md — 16 expansions, 0 compactions, 627k final context]
+    expected_effect: lead context stays under the ceiling; fresh sessions resume from state, not transcripts
+    primary_metric: median_context_per_response
+    guardrails: [hidden_check_score, packet_information_loss]
+    owner: commands
+    evaluation_due_after_runs: 2
+    removal_condition: E0 shows no quality or cost effect from either context mechanism
+  - id: M-014
+    name: writer-lease
+    reliability: execution
+    status: instrumented
+    motivating_evidence: [Cognition 2025/2026 — parallel writers make conflicting implicit decisions]
+    expected_effect: one writer per workspace; parallel work is reading and thinking
+    primary_metric: merge_conflicts_per_task
+    guardrails: [writer_wait_time]
+    owner: scripts/eaos
+    evaluation_due_after_runs: 4
+    removal_condition: no conflict ever observed across evaluated runs with leases advisory

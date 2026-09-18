@@ -101,3 +101,20 @@ Wire into Makefile `test` target: `@python3 scripts/test_eaos.py`.
 No token counting, no LLM calls, no yaml parsing, no daemon, no network, no colors beyond
 pass/fail markers, no Windows-specific code (POSIX paths fine), no subcommands beyond the
 list above.
+
+## v4 additions (2026-09-18; docs/specs/2026-09-17-eaos-v4-architecture.md)
+New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditional · 4 lock busy):
+- `snapshot` — identity of the product inputs (HEAD + tracked modifications + untracked
+  non-ignored files; `.eaos/` and cache noise excluded).
+- `check <id> --category test|lint|type|build|rehearsal|other --cmd "<shell>"` — runs the
+  command, records exit + output log + snapshot before/after; `--unavailable --reason` for an
+  explicit not-applicable. Exit 1 when the check fails or the command changed product files.
+- `unit start|handoff` — a unit of work with scope and start revisions; `--ready` is refused
+  without valid evidence for the current snapshot, with unreconciled in-scope board changes,
+  or while stale; `--blocked --reason` is always available and never a success claim.
+- `board post|resolve|view|diff|reconcile` — typed entries (≤400-char summary, `--ref`),
+  runtime metadata, `--invalidates` marks a unit stale, budgeted views that never silently
+  omit a blocking entry (exit 3 when incomplete), `--for checker` excludes maker claims.
+- `writer claim|release|show` — one writer per workspace (advisory on hosts without a gate).
+- `ctx <id> --tokens N` — records the lead's context size; exit 3 over the ceiling (advisory).
+- `status --packet` — the bounded continuation packet for a fresh context.

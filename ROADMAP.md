@@ -1,3 +1,5 @@
+> **2026-09-18:** the authoritative direction is now `docs/specs/2026-09-17-eaos-v4-architecture.md` (DRAFT until E0/E1 report). v3 is preserved at tag `e0-baseline`. Everything below predates v4.
+
 # EAOS Roadmap — crawl, walk, run
 
 North star (see `AGENT_OS.md` §0b): a complete engineering team as an OS — any task in, a

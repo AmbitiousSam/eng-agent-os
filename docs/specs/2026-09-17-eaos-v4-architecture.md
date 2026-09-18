@@ -8,6 +8,11 @@ three: an explicit freeze decision recorded in this file, the recorded outcomes 
 experiments it depends on, and passing tests for every contract being adopted. An
 unsuccessful or inconclusive experiment therefore activates nothing.
 
+**Implementation note (2026-09-18).** By owner decision the v4 runtime, front door,
+boundaries and checklists were built ahead of E0; v3 is preserved at git tag
+`e0-baseline` so E0 still runs against exactly the pre-registered v3. The freeze rule above
+is unchanged: implementation is not adoption.
+
 Inputs: the 2026-09-09 real run and its review, the software-factory study
 (`docs/research/2026-09-17-software-factories-study.md`), harness-effect papers cited
 there, and an external review of the v4 proposal (section 3 answers it point by point).
