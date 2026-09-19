@@ -150,3 +150,6 @@ User: pasting into a new chat loses autonomy. Agreed. Built: eaos checker run (h
 
 ## 2026-09-19 — v4.5.0: hosts own their subagents
 User showed Cursor spawning parallel subagents; docs confirm isolated context + loads ~/.claude/agents/. My 'no subagents on Cursor' premise was unverified and wrong. Deleted checker run, drain, host detection, paste packet, solo-mode.md, AGENTS.md fallback (~200 lines + 8 tests). One instruction for all hosts: spawn eaos-checker. Lesson: verify host capability from docs before building around its absence.
+
+## 2026-09-19 — run 13 + v4.5.1
+Bare-prompt run in Claude Code: lead chose toy (correct; my 'internal' prediction was wrong), work verified independently, honest final message. Fixes: executed check required whenever code changed since task start (start_snapshot), dirty-tree notice before first edit, no report file at toy. Gates 185/96/31/133.

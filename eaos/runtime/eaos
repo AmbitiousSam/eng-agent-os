@@ -867,6 +867,13 @@ def find_overlap_warnings(parent, title, paths, criteria):
             warnings.append((tid, score))
     return sorted(warnings)
 
+def _safe_start_snapshot():
+    try:
+        cfg = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+        return compute_snapshot(cfg)
+    except (SystemExit, Exception):
+        return None
+
 def cmd_task_new(args):
     if args.parent:
         task_dir(args.parent)  # validates existence; dies with usage error if missing
@@ -931,6 +938,10 @@ def cmd_task_new(args):
             "parent": args.parent,
             "paths": paths,
             "criteria_ids": criteria_ids,
+            # Run 13: a toy task closed "verified" on a sentence ("0 errors after") with no check
+            # through the runtime. Remember the code as it was, so completion can tell whether
+            # this task changed anything and, if so, insist on one executed check.
+            "start_snapshot": _safe_start_snapshot(),
             "outcome": outcome,
             "fingerprint": fp,
             "created": ts,
@@ -1454,6 +1465,18 @@ def require_status(state):
                         f"(snapshot {snapshot_short(current)}) — evidence recorded against "
                         f"earlier code is void; re-run `eaos check`", [], [])
         pass
+    elif state.get("start_snapshot") and state.get("kind") != "goal":
+        # Every stakes level, toy included: if the workspace changed since the task began,
+        # at least one check must have EXECUTED through the runtime against the code as it
+        # is now. A sentence in --evidence is a claim; an exit code bound to a snapshot is not.
+        cfg = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+        current = compute_snapshot(cfg)
+        if current != state["start_snapshot"] and not any(
+                evidence_status(state, cat, current)[0] == "pass" for cat in CHECK_CATEGORIES):
+            return (False, "the code changed since this task began and no check has passed through "
+                    "the runtime against the current code — run one, e.g. `eaos check <task> "
+                    "--category lint --cmd \"<the project's command>\"` (any category; "
+                    "`--category other` for a doc or config change)", [], [])
     if open_risks:
         return (False, "high RISK(s) without a verdict: " + ", ".join(open_risks) +
                 " — test each (verify --criterion R-<msg> --verdict verified|failed) or "

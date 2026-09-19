@@ -2933,5 +2933,36 @@ class TestGoalLevel(GoalBase):
         self.assertEqual(run(self.cwd, "finish", self.gid)[0], 0)
 
 
+class TestChangedCodeNeedsAnExecutedCheck(V4Case):
+    """Run 13: a toy task closed 'verified' on a sentence, with no check through the runtime."""
+
+    def edit(self, name="app.py", text="print(1)\n"):
+        with open(os.path.join(self.cwd, name), "w") as f:
+            f.write(text)
+
+    def test_toy_task_that_changed_code_cannot_finish_on_prose_alone(self):
+        tid = run(self.cwd, "task", "new", "tiny fix", "--kind", "chore", "--stakes", "toy")[1].strip().splitlines()[-1]
+        self.edit()
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "0 errors after, trust me")
+        rc, out, err = run(self.cwd, "finish", tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("no check has passed through the runtime", out)
+        self.assertEqual(run(self.cwd, "check", tid, "--category", "lint", "--cmd", "true")[0], 0)
+        self.assertEqual(run(self.cwd, "finish", tid)[0], 0)
+
+    def test_a_check_from_before_the_last_edit_does_not_count(self):
+        tid = run(self.cwd, "task", "new", "tiny fix 2", "--kind", "chore", "--stakes", "toy")[1].strip().splitlines()[-1]
+        self.edit()
+        run(self.cwd, "check", tid, "--category", "lint", "--cmd", "true")
+        self.edit(text="print(2)\n")
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
+        self.assertEqual(run(self.cwd, "finish", tid)[0], 1)
+
+    def test_a_task_that_changed_nothing_needs_no_check(self):
+        tid = run(self.cwd, "task", "new", "a question", "--kind", "question", "--stakes", "toy")[1].strip().splitlines()[-1]
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "read the code: answer is X")
+        self.assertEqual(run(self.cwd, "finish", tid)[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

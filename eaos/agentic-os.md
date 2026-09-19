@@ -36,8 +36,14 @@ the argument is `next`, `status` or `accept`, it refers to the open goal: `$E go
 `$E verify <task> --criterion AC-1 --verdict verified --evidence "<what ran, what happened>"`,
 and **`$E finish <task>`** at the end (it runs require, report and close, and stops at the first
 refusal; exit 2 anywhere = read `--help`, fix, retry). Nothing to do after all?
-`$E episode close <task> --abandon --reason "..."`. Stakes decide only how much sits between: toy = you do the work
-yourself, no units, no checker; internal = plus an independent checker; production = plus
+`$E episode close <task> --abandon --reason "..."`. **If you changed any file, one check must
+execute through the runtime after your last edit**, at every stakes level:
+`$E check <task> --category lint|test|type|build|other --cmd "<the project's command>"`. A sentence
+in `--evidence` is a claim; `finish` refuses without the executed check. **Before your first edit run
+`git status --short`**: if the tree already has uncommitted work that is not yours, tell the human in
+one line (and work on a new branch unless told otherwise); never stage, commit or revert their files.
+Stakes decide only how much sits between: toy = you do the work
+yourself, no units, no checker, and your closing message is the report (no report file); internal = plus an independent checker; production = plus
 `checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
 is never skipped above toy because the task "is just a merge" or "is just docs".
 **Criterion ids are fixed at intake**: the spec's own ids when it has
@@ -103,8 +109,9 @@ Every criterion has a verdict with evidence: `verified | failed | blocked | not_
 manual_confirmation_required`. Nothing that did not execute is `verified`. Every high or
 blocking risk on the board has a verdict (`--criterion R-B-nnn`), and every scenario has been
 graded by the checker (`$E scenario grade`). Then `$E finish <task>` (0, or 3 = conditional).
-Write `final-report.md` from `~/.claude/eaos/templates/final-report.md` and paste it to the
-human: what was asked, built, checked with proof, decided, not done, and what needs them.
+Tell the human: what was asked, built, checked with proof, decided, not done, and what needs them.
+At internal and production stakes also write it to `final-report.md` from
+`~/.claude/eaos/templates/final-report.md`; at toy stakes the message is enough.
 
 ## Context
 

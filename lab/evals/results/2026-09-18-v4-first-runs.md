@@ -105,3 +105,18 @@ door is ~1.6k of it; the rest is the host (system prompt, tool schemas, MCP serv
 lists, CLAUDE.md). A two-response typo run costs 85k context for that reason alone. EAOS cannot
 reduce it; the user's host configuration can. (4) The v3-era row is not a controlled comparison
 (different task) but the shape is the point: 12 subagents and 626k subagent tokens vs 1 and 45k.
+
+## Run 13 (v4.5.0, Claude Code) — T-038, prompt deliberately bare: "Fix the 6 react/no-unescaped-entities lint errors in platform/."
+Intake test: no stakes, criteria or branch given. The lead chose **toy** (right call for a 4-line JSX text
+escape; the reviewer's prediction of "internal" was wrong). Work verified independently: 1 file, 4 lines,
+lint 86 -> 80, rule at 0, rendered text unchanged, none of the 33 uncommitted files touched, no commit, no push.
+8 responses, context flat at ~75k (74k is host baseline), first real use of `eaos finish`. Final message honest
+("I only re-ran the rule count, not the full lint or a build"; report file left as the skeleton).
+Findings -> fixes (v4.5.1):
+1. Closed `verified` on a sentence, no check through the runtime. Fix: `task new` records `start_snapshot`;
+   completion refuses when the code changed since then and no check has passed against the current code
+   (every stakes level; goals exempt; a task that changed nothing needs none).
+2. Edited beside 33 uncommitted files without saying so (the scope check lives in a checklist toy never
+   loads). Fix: front door: `git status --short` before the first edit; say it in one line; never stage,
+   commit or revert the human's files.
+3. Empty report skeleton at toy stakes. Fix: at toy the closing message is the report.
