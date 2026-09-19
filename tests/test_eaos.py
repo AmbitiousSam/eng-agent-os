@@ -2944,6 +2944,31 @@ class TestGoalLevel(GoalBase):
         self.assertEqual(self.close_item(a), 0)
         self.assertIn(b, run(self.cwd, "goal", "next", self.gid)[1])
 
+    def test_spawns_during_a_goal_are_charged_to_the_item_in_progress_not_pooled(self):
+        """First real goal: 12 spawns all landed on the goal and the 13th was refused."""
+        self.lock()
+        a = self.item("expiry", "R-1")
+        b = self.item("404s", "R-2")
+        self.assertEqual(run(self.cwd, "spawn", self.gid, "--agent", "eaos-reader")[0], 0)   # intake: on the goal
+        run(self.cwd, "unit", "start", a, "--title", "build a", "--kind", "build")
+        for n in range(3):
+            self.assertEqual(run(self.cwd, "spawn", self.gid, "--agent", f"eaos-builder-{n}")[0], 0)
+        def count(t):
+            with open(os.path.join(self.cwd, ".eaos", t, "state.json")) as f:
+                return json.load(f)["spawns"]["count"]
+        self.assertEqual((count(self.gid), count(a), count(b)), (1, 3, 0))
+        with open(os.path.join(self.cwd, ".eaos", self.gid, "warroom.md")) as f:
+            self.assertIn(f"charged to item {a}", f.read())
+
+    def test_goal_own_budget_scales_with_its_items(self):
+        self.lock()
+        self.item("expiry", "R-1"); self.item("404s", "R-2")
+        with open(os.path.join(self.cwd, ".eaos", "config.json")) as f:
+            cap = json.load(f)["max_agent_spawns_per_task"]
+        for n in range(cap + 2):                                   # more than one task's base
+            rc, out, err = run(self.cwd, "spawn", self.gid, "--agent", f"eaos-reader-{n}")
+            self.assertEqual(rc, 0, out + err)
+
     def test_goal_finishes_only_from_the_items_own_records_and_graded_acceptance(self):
         self.lock()
         a = self.item("expiry", "R-1")
@@ -3003,6 +3028,52 @@ class TestChangedCodeNeedsAnExecutedCheck(V4Case):
         tid = run(self.cwd, "task", "new", "a question", "--kind", "question", "--stakes", "toy")[1].strip().splitlines()[-1]
         run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "read the code: answer is X")
         self.assertEqual(run(self.cwd, "finish", tid)[0], 0)
+
+
+class TestSpawnBudgetFollowsTheWork(V4Case):
+    """A fixed cap kept biting as work grew. The budget follows units, items and stakes."""
+
+    def cfg(self, **kw):
+        p = os.path.join(self.cwd, ".eaos", "config.json")
+        with open(p) as f:
+            c = json.load(f)
+        c.update(kw)
+        with open(p, "w") as f:
+            json.dump(c, f)
+
+    def spawn_until_refused(self, tid, limit=80):
+        n = 0
+        while n < limit:
+            rc, out, err = run(self.cwd, "spawn", tid, "--agent", f"a{n}")
+            if rc != 0:
+                return n, out
+            n += 1
+        return n, ""
+
+    def test_more_units_more_budget_and_cancelled_units_do_not_count(self):
+        self.cfg(max_agent_spawns_per_task=4, reserved_verifier_spawns=0, reserved_loopback_spawns=0)
+        base_n, _ = self.spawn_until_refused(self.tid)
+        self.assertEqual(base_n, 4)
+        t2 = run(self.cwd, "task", "new", "bigger", "--kind", "feature")[1].strip().splitlines()[-1]
+        u = [run(self.cwd, "unit", "start", t2, "--title", f"u{i}", "--kind", "read")[1].strip() for i in range(3)]
+        run(self.cwd, "unit", "cancel", t2, u[2], "--reason", "out of scope")
+        n, out = self.spawn_until_refused(t2)
+        self.assertEqual(n, 4 + 2 * 2)                       # base + per_unit x two LIVE units
+        self.assertIn("BUDGET EXCEEDED", out)
+
+    def test_production_stakes_get_two_more_and_the_ceiling_is_hard(self):
+        self.cfg(max_agent_spawns_per_task=4, reserved_verifier_spawns=0, reserved_loopback_spawns=0)
+        t = run(self.cwd, "task", "new", "prod", "--kind", "feature", "--stakes", "production")[1].strip().splitlines()[-1]
+        self.assertEqual(self.spawn_until_refused(t)[0], 6)
+        self.cfg(spawn_budget={"base": 50, "per_unit": 10, "hard_ceiling": 7})
+        t3 = run(self.cwd, "task", "new", "runaway", "--kind", "feature")[1].strip().splitlines()[-1]
+        for i in range(5):
+            run(self.cwd, "unit", "start", t3, "--title", f"u{i}", "--kind", "read")
+        self.assertEqual(self.spawn_until_refused(t3)[0], 7)
+
+    def test_status_shows_the_live_budget(self):
+        run(self.cwd, "unit", "start", self.tid, "--title", "u", "--kind", "read")
+        self.assertIn("budget follows", run(self.cwd, "status", self.tid)[1])
 
 
 if __name__ == "__main__":

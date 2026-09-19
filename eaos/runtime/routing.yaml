@@ -30,7 +30,11 @@ stakes:
 
 # ---- Budgets (mirrored into .eaos/config.json by `eaos init`) ----
 budget:
-  max_agent_spawns_per_task: 15    # 12 planning + 2 loop-back + 1 verifier
+  max_agent_spawns_per_task: 15    # the BASE of the budget, not a fixed cap (see spawn_budget)
+  spawn_budget:                    # the budget follows the shape of the work
+    per_unit: 2                    #   + 2 for every live unit (a builder and a re-build)
+    per_item: 3                    #   + 3 for every item of a goal (its own spawns when none can be charged to one item)
+    hard_ceiling: 60               #   never more than this, whatever was declared; production stakes add 2
   reserved_verifier_spawns: 1      # the top slot is a checker's, always
   reserved_loopback_spawns: 2      # open only after `eaos loopback` records one
   max_parallel_readers: 4          # readers contribute intelligence, budgeted

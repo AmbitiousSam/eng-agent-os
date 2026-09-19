@@ -154,3 +154,12 @@ New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditiona
 ## v4.5.0 (2026-09-19)
 
 `checker run`, `drain` and `$EAOS_HOST_CMD` are removed. They assumed hosts without subagents; Cursor has them and loads `~/.claude/agents/`. Design: `lab/specs/2026-09-19-hosts-own-their-subagents-design.md`.
+
+## v4.5.5 (2026-09-19)
+
+- Spawn budget is no longer one number. `spawn_budget(cfg, state)` = base (`max_agent_spawns_per_task`, so an
+  existing project never gets stricter) + `per_unit` x live units + `per_item` x goal items + 2 at production
+  stakes, capped at `hard_ceiling` (defaults 2, 3, 60; tune under `spawn_budget` in `.eaos/config.json`).
+  `status` prints the live budget; audit uses the largest budget in a tree.
+- A spawn arriving on a goal is charged to the one item in progress (logged on the goal); with none or several
+  in progress it stays on the goal.

@@ -1205,12 +1205,66 @@ def audit_find_cycle(task_id, snap):
         cur = parent
     return None
 
+def spawn_budget(cfg, state):
+    """The spawn budget follows the SHAPE of the work; it is not one number for every task.
+    A fixed cap kept biting as work grew (12 on a five-item goal; it would bite any task with
+    many units next). The budget exists to stop runaway spawning, so it grows with what the
+    task has declared and is bounded by a hard ceiling:
+
+        base                       readers at intake, a checker, a re-check
+      + per_unit  x live units     each build unit may need a builder and a re-build
+      + per_item  x goal items     a goal's own spawns when none can be charged to one item
+      + 2 at production stakes     security reader, second checker
+      capped at hard_ceiling
+
+    `max_agent_spawns_per_task` (older configs, `init --max-spawns`) is the BASE, so an existing
+    project never gets a stricter budget than it had. Tune under `spawn_budget` in config.json."""
+    sb = cfg.get("spawn_budget") or {}
+    base = int(sb.get("base", cfg.get("max_agent_spawns_per_task", 15)))
+    units = sum(1 for u in (state.get("units") or {}).values() if u.get("status") != "cancelled")
+    items = len((state.get("goal") or {}).get("items", [])) if state.get("kind") == "goal" else 0
+    cap = (base + int(sb.get("per_unit", 2)) * units + int(sb.get("per_item", 3)) * items
+           + (2 if state.get("stakes") == "production" else 0))
+    return min(cap, int(sb.get("hard_ceiling", 60)))
+
+def goal_item_in_progress(goal_state):
+    """The ONE item of a goal that is visibly being worked (not closed, and already has
+    scenarios, units, criteria or checks). None when zero or several are: then the spawn
+    belongs to the goal itself (intake readers, the final acceptance checker)."""
+    live = []
+    for i in (goal_state.get("goal") or {}).get("items", []):
+        try:
+            st = load_state(i["task"])
+        except SystemExit:
+            continue
+        if st.get("status") != "closed" and (st.get("scenarios") or st.get("units")
+                                             or st.get("criteria") or st.get("checks")):
+            live.append(i["task"])
+    return live[0] if len(live) == 1 else None
+
 def cmd_spawn(args):
     cfg = load_config()
     cap = cfg["max_agent_spawns_per_task"]
+    # First real goal (synergina T-042, 2026-09-19): the session stays bound to the GOAL while
+    # the lead works its items, so every builder and checker was counted on the goal and the
+    # 13th spawn was refused with one item and the acceptance check still to go. Items were
+    # designed NOT to pool a budget. So: a spawn arriving on a goal is charged to the item in
+    # progress (its own per-task budget); with no single item in progress it stays on the goal,
+    # whose cap scales with its size.
+    try:
+        gstate = load_state(args.id)
+    except SystemExit:
+        gstate = {}
+    if gstate.get("kind") == "goal":
+        item = goal_item_in_progress(gstate)
+        if item:
+            with task_lock(args.id):
+                warroom_log(args.id, f"[{now_iso()}] SPAWN agent={args.agent} charged to item {item}")
+            args.id = item
     with project_lock():
         with task_lock(args.id):
             state = load_state(args.id)
+            cap = spawn_budget(cfg, state)
             fp = compute_request_fingerprint("spawn", args.id, [("agent", args.agent)])
             idempotency_guard(state, args.idempotency_key, fp, "spawn", args.id)
             if state.get("status") == "blocked":
@@ -1649,7 +1703,7 @@ def cmd_status(args):
         print("episode: closed")
 
     spawns = state["spawns"]
-    print(f"Spawns: {spawns['count']}/{cfg['max_agent_spawns_per_task']}")
+    print(f"Spawns: {spawns['count']}/{spawn_budget(cfg, state)} (budget follows units, items and stakes)")
 
     lb = state["loopbacks"]
     print(f"Loopbacks: total {lb['total']}/{cfg['max_total_loopbacks']}; "
@@ -2130,7 +2184,15 @@ def cmd_audit(args):
         if cyc:
             cycle_members.update(cyc)
 
-    cap = cfg["max_agent_spawns_per_task"]
+    # the budget is per task and follows its shape (spawn_budget); a tree can never have
+    # legitimately spent more than the largest budget any member was entitled to
+    cap = 0
+    for tid in tree:
+        try:
+            cap = max(cap, spawn_budget(cfg, load_state(tid)))
+        except SystemExit:
+            continue
+    cap = cap or cfg["max_agent_spawns_per_task"]
     total = sum(snap[tid]["spawns"] for tid in tree if tid in snap)
 
     k_bad = []

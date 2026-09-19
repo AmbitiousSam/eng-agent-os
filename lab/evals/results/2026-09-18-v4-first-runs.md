@@ -180,3 +180,26 @@ Findings:
    hatches before and after, including a helper that launders the forbidden thing); intake checklist adds a
    HOW criterion when the ask is a number.
 3. One scenario only, about the CI file. Thin for a 46-file change.
+
+## Run 17 (v4.5.4, Claude Code) — T-042, FIRST REAL GOAL: "Follow-through" (product-level feature, prompt opened "Treat this as a goal")
+43 minutes, one chat, 55 lead responses, context 76k -> 161k, 13 subagents.
+- Intake: **three `eaos-reader` subagents in parallel** (first real use of parallel readers), then an intent
+  contract with 13 requirements and 13 acceptance lines. The lead stopped; the human typed "lock it"; locked by hash,
+  no amendments since.
+- Plan: 5 build items, each naming its requirements, T-044..T-047 all `--after` T-043. `goal check` passed.
+- Execution: builder subagent then checker subagent per item. T-043, T-044, T-046 closed verified; **T-045 closed
+  conditional** (two scenarios need a real browser). Every item has 4-6 scenarios written before its build.
+  The lead declined to seed follow-ups for a browser check because the local app points at a shared database.
+- "No email goes to a real user until I say so" became a dry-run default that cannot send.
+- **Stopped by an EAOS defect, not by the work.** The session stays bound to the goal, so all 12 subagents were
+  charged to the goal's single per-task budget; the 13th (T-047's builder) was refused, with its checker and the
+  acceptance checker still to come. The lead did not raise the cap itself and asked the human.
+Fix (v4.5.5): a spawn arriving on a goal is charged to the one item in progress (its own budget, line logged on
+the goal); with no single item in progress it stays on the goal. Replayed on a copy of the real state: T-047's builder and checker now pass (1/12, 2/12 on T-047) and
+the acceptance checker passes on the goal (13/72).
+Observation, not acted on: the lead ran to 161k, past the 150k advisory ceiling, inside one long turn; the ceiling is
+only measured when a turn stops.
+
+Siva's steer on the fix: a fixed number will keep biting as work grows; make it dynamic. Done in the same release:
+the budget now follows the work (base + 2 per live unit + 3 per goal item + 2 at production, hard ceiling 60). The
+configured number became the base, so no existing project gets a stricter budget than it had.

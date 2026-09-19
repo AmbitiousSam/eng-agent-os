@@ -162,3 +162,9 @@ Real dashboard feature in synergina: one internal task (not a goal), scenarios b
 
 ## 2026-09-19 — run 16 + v4.5.4
 Goal-level test sized as one task again (4 min, lint 64->0, CI blocking; verified independently). Goal level has never fired: model only needs it beyond one context. Checker approved metric gaming: loose() helper laundering ~40 any. Fix: metric-criteria rule in checker def, verdict and intake checklists (text only).
+
+## 2026-09-19 — run 17: first real goal + v4.5.5
+Goal level fired and worked through 4 of 5 items (parallel readers at intake, intent locked by human, builder+checker per item, one conditional). Blocked by my bug: spawns pooled on the goal (session bound to goal). Fix: charge to item in progress, goal cap scales with items. Replayed on real state: passes.
+
+## 2026-09-19 — dynamic spawn budget (Siva's steer)
+Fixed cap replaced: budget = base + 2/live unit + 3/goal item + 2 at production, hard ceiling 60; configured number is the base. Replayed on real T-042: T-047 1/14, goal 12/27.
