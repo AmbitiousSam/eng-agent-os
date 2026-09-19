@@ -171,3 +171,6 @@ Fixed cap replaced: budget = base + 2/live unit + 3/goal item + 2 at production,
 
 ## 2026-09-19 — v4.5.6
 v4.5.5's goal-side note was a SPAWN line; audit counted it; careful lead stopped and blocked T-047. Fixed note wording, audit tolerance for old line, budget explanation on refusal, unblock without phase name. Lesson: replay the AUDIT, not only the verb, against real state before release.
+
+## 2026-09-20 — v4.5.7
+Two fresh chats both stalled on T-047: read raw config 12 + stale block note; user should not have to paste explanations. goal next + packet now print the LIVE budget, flag a block and how to clear it; front door: read budget from eaos status, never config.json.

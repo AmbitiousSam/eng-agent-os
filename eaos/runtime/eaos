@@ -3060,6 +3060,13 @@ def print_packet(task_id, state, cfg):
             print(f"  {u['id']} {u['status']} {u['kind']} scope={u.get('scope')} :: {u['title']}")
     w = read_writer()
     print(f"writer: {w['task'] + '/' + w['unit'] if w else '(none)'}")
+    cfg_b = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+    print(f"spawn budget: {state.get('spawns', {}).get('count', 0)}/{spawn_budget(cfg_b, state)} "
+          f"(live: base + units + goal items + stakes; config.json holds only the base)")
+    if state.get("status") == "blocked" and state.get("blocked"):
+        b = state["blocked"]
+        print(f"BLOCKED: {b.get('issue') or b.get('reason')} — resume with "
+              f"`eaos phase {state.get('id')} --unblock --reason \"...\"`")
     scn = state.get("scenarios", [])
     if scn:
         graded = sum(1 for s in scn if s in state.get("criteria", {}))
@@ -3457,6 +3464,19 @@ def cmd_goal(args):
             waiting = [a for a in i.get("after", []) if a not in done]
             if waiting:
                 continue
+            cfg_n = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+            ist = load_state(i["task"])
+            print(f"spawn budget (live, follows the work; do NOT read config.json for it): "
+                  f"goal {state['spawns']['count']}/{spawn_budget(cfg_n, state)}, "
+                  f"{i['task']} {ist['spawns']['count']}/{spawn_budget(cfg_n, ist)}")
+            if st == "blocked":
+                b = ist.get("blocked") or {}
+                print(f"NEXT IS BLOCKED: {i['task']} [{i['kind']}] {i['title']}")
+                print(f"  recorded reason: {b.get('issue') or b.get('reason')}")
+                print("  If that reason was a spawn cap, compare it with the live budget above: a block "
+                      "recorded under the old fixed cap is stale when the budget now has room.")
+                print(f"  resume: {os.path.basename(sys.argv[0])} phase {i['task']} --unblock --reason \"<why it no longer holds>\"")
+                sys.exit(3)
             print(f"NEXT: {i['task']} [{i['kind']}] {i['title']}")
             print(f"serves: {', '.join(i['serves']) or '(nothing: an investigation)'}")
             try:

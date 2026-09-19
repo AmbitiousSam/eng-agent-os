@@ -88,7 +88,8 @@ Spawn help through the Agent tool with these definitions and **only** these inpu
 If this host truly cannot start a fresh context, say the check needs a new chat and stop. Never
 grade your own work.
 
-Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
+The spawn budget follows the work (units, goal items, stakes): read it from `$E status`, never
+from `config.json`. Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
 task is BLOCKED on the human (`$E loopback --class hard_blocker`), never "checked by me".
 
 **Human gate, always, before doing any of these:** push or merge to a shared branch, deploy,
