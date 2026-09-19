@@ -13,6 +13,18 @@ give itself, and enforces them with a script whose exit codes the agent cannot a
 
 Works in **Claude Code, Cursor and Codex**. No personas, no phase pipeline.
 
+```mermaid
+flowchart TD
+    you["You<br/>/agentic-os anything"] --> host["Host: Claude Code, Cursor, Codex<br/>models, tools, permissions, context"]
+    host --> door["Front door, loaded once<br/>fits one chat: task. bigger: goal"]
+    door --> agent["The agent leads the work<br/>checklists on demand, no personas"]
+    agent --> runtime["Runtime script<br/>exit codes are binding"]
+    agent --> checker["Independent checker<br/>never sees the build"]
+```
+
+The host is the operating system. EAOS is the part that decides what counts as done: the agent
+reasons freely and cannot argue with the last two boxes.
+
 ## Install
 
 ```bash
@@ -48,18 +60,62 @@ command fails, show the user its last ten lines and stop. To verify later:
 | `~/.claude/agents/eaos-{builder,reader,checker}.md` | three tool-scoped boundaries | Claude Code |
 | `~/.agents/skills/agentic-os/SKILL.md` | the same front door as a global skill, generated at install | Cursor, Codex |
 | `~/.claude/eaos/` | the runtime script, checklists, templates, config | every host |
-| `~/.claude/settings.json` | three hook entries, only if Claude Code is installed; the file is backed up first | Claude Code |
+| `~/.claude/settings.json` | four hook entries, only if Claude Code is installed; the file is backed up first | Claude Code |
 
 In your projects EAOS writes one folder, `.eaos/`, holding task state. Add it to `.gitignore` or
-commit it, your choice. Earlier EAOS versions are cleaned up automatically: a file is deleted only if
-it is byte-identical to what EAOS shipped; anything you customised is moved to
-`~/.claude/eaos/quarantine/`.
+commit it, your choice.
 
-Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.2.0` pins a release, `EAOS_SRC=<dir>` moves
-the checkout. **Uninstall:** `bash ~/.eaos-src/setup.sh --uninstall`. Working from a clone instead:
-`./setup.sh`, then optionally `./eaos/runtime/install-eaos-hooks.sh`.
+Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.3.0` pins a release, `EAOS_SRC=<dir>` moves
+the checkout. Working from a clone instead: `./setup.sh`, then optionally
+`./eaos/runtime/install-eaos-hooks.sh`.
+
+## Upgrading from an older version (v1, v2, v3)
+
+Run the same one-line install. It removes what older versions put on the machine before installing
+the current one: the persona agents and the `agency-*` library, the old `/agent-os`, `/incident` and
+`/triage` commands, the playbooks, the old skills, `protocol.md`, `loop.md`, `orchestrator.md`.
+
+The rule is strict so that nothing of yours is lost: a file is **deleted only if it is byte-identical
+to what EAOS shipped**. Anything you edited, and anything at one of those paths that EAOS never
+shipped, is **moved** to `~/.claude/eaos/quarantine/<timestamp>/` with a `MANIFEST.txt` listing what
+moved. Your projects' `.eaos/` folders are never touched; old task records stay readable.
+
+To see the plan before anything changes:
+
+```bash
+git clone https://github.com/AmbitiousSam/eng-agent-os.git ~/.eaos-src
+bash ~/.eaos-src/setup.sh --dry-run     # prints every removal and quarantine, changes nothing
+```
+
+Then run the one-line install, and restart Claude Code. If you had cloned the repository somewhere
+yourself for an older version, that clone is no longer used (the installer keeps its own at
+`~/.eaos-src`); delete it when you like. The old version stays available on branch `v3`.
+
+## Uninstall
+
+```bash
+bash ~/.eaos-src/setup.sh --uninstall
+```
+
+This removes **every EAOS version** from the machine: the hook entries in `~/.claude/settings.json`
+(the file is backed up first), the command, the three agents, the global skill, the runtime,
+checklists and templates, and any leftovers from v1 to v3 under the same delete-or-quarantine rule.
+It keeps what is yours: each project's `.eaos/` folder, the scenario store
+(`~/.claude/eaos/scenarios/`) and the quarantine folder. To finish, delete those if you want them
+gone, then `rm -rf ~/.eaos-src`. Restart Claude Code afterwards.
 
 ## What a task looks like
+
+```mermaid
+flowchart TD
+    t1["1. Open the task<br/>stakes: toy, internal, production"] --> t2["2. Say what done means<br/>criteria, plus scenarios the builder never sees"]
+    t2 --> t3["3. Work in units<br/>each names its criterion, one writer at a time"]
+    t3 --> t4["4. Run the real checks<br/>bound to a code snapshot, void on any edit"]
+    t4 --> t5["5. Independent check<br/>clean context, grades by executing"]
+    t5 --> t6["6. eaos finish<br/>verdict, report, close"]
+    t3 <--> board[("The board<br/>findings, decisions, risks<br/>on disk, survives a fresh chat")]
+    board --> t5
+```
 
 You type the task. The agent then, on its own:
 
@@ -79,6 +135,19 @@ You type the task. The agent then, on its own:
 ### When the ask is bigger than one chat
 
 Same command. The agent recognises a product, a feature set or a backlog and opens a **goal**:
+
+```mermaid
+flowchart TD
+    g1["1. Intent contract, locked with you<br/>requirements, non-goals, acceptance, hashed"] --> g2["2. Work items, plan checked<br/>each serves a requirement: no orphans, no creep"]
+    g2 --> g3
+    subgraph g3["3. One item per chat: /agentic-os next"]
+        direction LR
+        c1["Chat 1<br/>item = task"] --> c2["Chat 2<br/>item = task"] --> c3["Chat n<br/>item = task"]
+    end
+    g3 --> g4["4. Acceptance of the whole<br/>clean checker runs each acceptance line"]
+    g4 --> g5["5. eaos finish<br/>refuses until all of it holds"]
+    g3 <--> disk[(".eaos/ on disk<br/>the only thing carried between chats<br/>/agentic-os status")]
+```
 
 1. It writes an **intent contract** (requirements, constraints, non-goals, acceptance), shows it to
    you, and locks it by hash once you agree. Later changes need a recorded reason.

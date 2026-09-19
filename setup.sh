@@ -43,15 +43,6 @@ DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 SKILL_DIR="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os"
 
-# ./setup.sh --uninstall : remove everything this installer put on the machine. Project-local
-# .eaos/ directories, scenario stores and the quarantine folder are yours and are left alone.
-if [ "${1:-}" = "--uninstall" ]; then
-  bash "$EAOS_DIR/eaos/runtime/install-eaos-hooks.sh" --uninstall >/dev/null 2>&1 || true
-  rm -f "$COMMANDS_DIR/agentic-os.md" "$AGENTS_DIR"/eaos-builder.md "$AGENTS_DIR"/eaos-reader.md "$AGENTS_DIR"/eaos-checker.md
-  rm -rf "$CONFIG_DIR/bin" "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/routing.yaml" "$SKILL_DIR"
-  say "Uninstalled. Kept: project .eaos/ folders, $CONFIG_DIR/scenarios, $CONFIG_DIR/quarantine."
-  exit 0
-fi
 QUAR="$CONFIG_DIR/quarantine/$(date +%Y%m%d-%H%M%S)"
 removed=0; quarantined=0
 
@@ -113,6 +104,18 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 [ "$removed" -gt 0 ] && say "Removed $removed unmodified EAOS item(s) from earlier versions."
 [ "$quarantined" -gt 0 ] && say "Quarantined $quarantined item(s) (not verifiably ours) -> $QUAR (see MANIFEST.txt)"
+
+# ./setup.sh --uninstall : remove everything EAOS put on this machine, every version. The legacy
+# cleanup above has already run (same manifest rule: byte-identical files deleted, anything
+# customised quarantined). Project-local .eaos/ folders, the scenario store and the quarantine
+# folder are yours and are left alone.
+if [ "${1:-}" = "--uninstall" ]; then
+  bash "$EAOS_DIR/eaos/runtime/install-eaos-hooks.sh" --uninstall >/dev/null 2>&1 || true
+  rm -f "$COMMANDS_DIR/agentic-os.md" "$COMMANDS_DIR/agentic-os.md.bak" "$AGENTS_DIR"/eaos-builder.md "$AGENTS_DIR"/eaos-reader.md "$AGENTS_DIR"/eaos-checker.md "$AGENTS_DIR"/eaos-*.md.bak
+  rm -rf "$CONFIG_DIR/bin" "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/routing.yaml" "$SKILL_DIR"
+  say "Uninstalled. Kept: project .eaos/ folders, $CONFIG_DIR/scenarios, $CONFIG_DIR/quarantine."
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------------------
 # 2) INSTALL v4  (directories are created only here — a --dry-run has exited above)
