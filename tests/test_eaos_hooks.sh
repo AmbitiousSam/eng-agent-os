@@ -174,7 +174,7 @@ d = json.load(open('$CLAUDE_HOME/settings.json'))
 print(sum(1 for e in d['hooks']['PreToolUse'] for h in e.get('hooks', [])
           if 'eaos-hook.sh' in h.get('command', '')))
 ")"
-assert_eq "(h) one PreToolUse eaos-hook.sh entry after install" "1" "$n_pretool"
+assert_eq "(h) two PreToolUse eaos-hook.sh entries after install (spawn budget + guard)" "2" "$n_pretool"
 n_stop="$(python3 -c "
 import json
 d = json.load(open('$CLAUDE_HOME/settings.json'))
@@ -201,7 +201,7 @@ d = json.load(open('$CLAUDE_HOME/settings.json'))
 print(sum(1 for e in d['hooks']['PreToolUse'] for h in e.get('hooks', [])
           if 'eaos-hook.sh' in h.get('command', '')))
 ")"
-assert_eq "(h) re-install does not duplicate PreToolUse entry" "1" "$n_pretool_again"
+assert_eq "(h) re-install does not duplicate PreToolUse entries" "2" "$n_pretool_again"
 
 # --uninstall: removes only ours.
 bash "$INSTALL" --uninstall >/tmp/eaos_uninstall_test.$$ 2>&1
@@ -460,6 +460,38 @@ MT="$(new_task "$MAIN" "main task")"
 run_hook pretool "$(pretool_json "$MAIN" Agent eaos-reader "tu-p3" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["session_id"]="swt"; print(json.dumps(d))')"
 assert_eq "(p) stale pointer ignored after the worktree task closed" "1" "$(spawns_of "$MAIN" "$MT")"
 rm -rf "$MAIN" "$WT"
+
+echo ""
+echo "(q) guard: scenario store is unreachable by tools; the pen is one per workspace"
+new_project; TA="$(new_task "$PROJ" "holder task")"; TB="$(new_task "$PROJ" "other task")"
+export EAOS_SCENARIO_HOME="$PROJ/scn-store"; mkdir -p "$EAOS_SCENARIO_HOME/ws"
+gj() { python3 -c '
+import json, sys
+tool, key, val, sid, cwd = sys.argv[1:6]
+print(json.dumps({"tool_name": tool, "session_id": sid, "cwd": cwd, "tool_input": {key: val}}))' "$@"; }
+run_hook guard "$(gj Read file_path "$EAOS_SCENARIO_HOME/ws/T-001.json" s1 "$PROJ")"
+assert_eq "(q) Read inside the scenario store is blocked" "2" "$HOOK_RC"
+run_hook guard "$(gj Bash command "cat $EAOS_SCENARIO_HOME/ws/T-001.json" s1 "$PROJ")"
+assert_eq "(q) Bash naming the scenario store is blocked" "2" "$HOOK_RC"
+run_hook guard "$(gj Bash command "~/.claude/eaos/bin/eaos scenario list $TA --for checker" s1 "$PROJ")"
+assert_eq "(q) the runtime's own scenario verb is allowed" "0" "$HOOK_RC"
+run_hook guard "$(gj Read file_path "$PROJ/README.md" s1 "$PROJ")"
+assert_eq "(q) an ordinary read is allowed" "0" "$HOOK_RC"
+run_hook guard "not json at all"
+assert_eq "(q) malformed input fails open" "0" "$HOOK_RC"
+( cd "$PROJ" && python3 "$EAOS" session bind "$TA" --session sA >/dev/null && python3 "$EAOS" session bind "$TB" --session sB >/dev/null
+  U="$(python3 "$EAOS" unit start "$TA" --title u --kind build)"; python3 "$EAOS" writer claim "$TA" --unit "$U" >/dev/null )
+echo x > "$PROJ/app.py"
+run_hook guard "$(gj Edit file_path "$PROJ/app.py" sA "$PROJ")"
+assert_eq "(q) the pen holder may edit" "0" "$HOOK_RC"
+run_hook guard "$(gj Edit file_path "$PROJ/app.py" sB "$PROJ")"
+assert_eq "(q) a session on another task is refused while the pen is held" "2" "$HOOK_RC"
+assert_contains "(q) refusal names the holder" "$HOOK_ERR" "$TA"
+run_hook guard "$(gj Edit file_path "$PROJ/app.py" sUnbound "$PROJ")"
+assert_eq "(q) an unbound session is not gated" "0" "$HOOK_RC"
+run_hook guard "$(gj Write file_path "$PROJ/.eaos/$TB/artifacts/note.md" sB "$PROJ")"
+assert_eq "(q) writes under .eaos/ are never gated" "0" "$HOOK_RC"
+unset EAOS_SCENARIO_HOME; rm -rf "$PROJ"
 
 echo ""
 echo "========================================"

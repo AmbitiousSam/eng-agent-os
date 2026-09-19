@@ -50,13 +50,13 @@ adapters:
   claude-code:
     fresh_context_unit: enforced          # Agent tool subagent
     checker_without_maker_transcript: advisory   # prompt construction; artifacts readable
-    scenarios_hidden_from_maker: advisory
+    scenarios_hidden_from_maker: enforced   # PreToolUse guard refuses tool access to the store; a shell command that hides the path is not caught
     spawn_budget_gate: enforced           # PreToolUse hook -> eaos spawn (fail-open on infra)
     stop_time_audit: enforced             # Stop hook -> eaos audit (fail-open on infra)
-    writer_lease: advisory                # runtime lease; edits are not gated
+    writer_lease: enforced                # guard refuses Edit/Write when another task holds the pen; sed and redirects are not covered
     context_ceiling: measured             # Stop hook -> eaos ctx; cannot force a reset
     check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff + verify --require
     bootstrap_loaded_once: advisory       # the command says not to re-run it; nothing prevents expansion
     unit_state_reaches_completion: enforced      # blocked/stale/active units and void evidence refuse --require
-  cursor: {fresh_context_unit: manual, everything_else: advisory}
-  codex: {fresh_context_unit: manual, everything_else: advisory}
+  cursor: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: manual}
+  codex: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: manual}

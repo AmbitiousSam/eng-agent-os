@@ -26,6 +26,9 @@ This skill runs in Cursor, Codex or any host that loads `~/.agents/skills`. In C
   Grade every criterion and scenario by executing something, record each with `eaos verify` and
   `eaos scenario grade`, and finish with APPROVE, CONDITIONAL or REJECT.
   ```
-- Spawn counting and session binding are Claude Code hook features and are absent here. Everything
+- Goal acceptance follows the same rule: a new chat, given the intent contract, `eaos goal status`
+  and the repository, and told to grade every `A-n` by execution.
+- Spawn counting, session binding, the scenario-store guard and the pen gate are Claude Code hook
+  features and are absent here. Everything
   else (board, evidence, scenarios, verdict rules, refusals) is identical because it lives in the script.
 

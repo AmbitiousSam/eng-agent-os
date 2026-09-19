@@ -19,8 +19,13 @@ install_file() {
   local src="$1" dst="$2"
   if [ -e "$dst" ]; then
     cmp -s "$src" "$dst" && return 0
-    cp -f "$dst" "$dst.bak"
-    say "  backed up modified file -> $dst.bak"
+    # Files under eaos/ (runtime, checklists, templates, adapters) are EAOS-owned and replaced on
+    # every update: backing each one up just litters the folder the agent reads from. The front
+    # door and the agent definitions are the places a user might have edited, so those are kept.
+    case "$dst" in
+      "$CONFIG_DIR"/*) ;;
+      *) cp -f "$dst" "$dst.bak"; say "  backed up modified file -> $dst.bak" ;;
+    esac
   fi
   cp -f "$src" "$dst"
 }
@@ -142,6 +147,9 @@ for f in "$EAOS_DIR"/eaos/checklists/*.md; do [ -e "$f" ] && install_file "$f" "
 for f in "$EAOS_DIR"/eaos/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
 install_file "$EAOS_DIR/eaos/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
 install_file "$EAOS_DIR/eaos/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
+# litter from earlier installs' per-file backups inside EAOS-owned folders
+find "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin" -maxdepth 1 -name '*.bak' -delete 2>/dev/null || true
+rm -f "$CONFIG_DIR/routing.yaml.bak"
 # stale checklists/templates from a previous v4 install that no longer exist upstream
 for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/eaos/checklists/$(basename "$f")" ] && rm -f "$f"; done
 

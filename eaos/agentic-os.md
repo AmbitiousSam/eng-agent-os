@@ -19,6 +19,14 @@ first (it also binds this session to the task, so spawns are counted).
 are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 3 conditional ·
 4 lock busy, retry. No CLI installed → tell the human to run `setup.sh` and stop.
 
+## Task or goal?
+
+If the ask fits one chat, it is a **task**: continue below. If it is bigger (a product, a feature
+set, a backlog, an investigation that will spawn work), it is a **goal**: load
+`checklists/goal.md` and follow it. A goal is an intent contract you lock with the human, work items
+that each name the requirement they serve, **one item per chat**, and acceptance of the whole. If
+the argument is `next`, `status` or `accept`, it refers to the open goal: `$E goal next|status <goal>`.
+
 ## Start (one command, then work)
 
 `$E init && $E task new "<title>" --kind feature|bug|chore|incident|question --stakes toy|internal|production`
@@ -26,8 +34,8 @@ are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 
 **Always, at every stakes level and every task shape** (a doc, a merge, a two-line fix):
 `task new` first, criteria recorded with
 `$E verify <task> --criterion AC-1 --verdict verified --evidence "<what ran, what happened>"`,
-and `verify --require`, `report`, `episode close` at the end — one command at a time; a
-non-zero exit stops you (exit 2 = read `--help`, fix, retry). Nothing to do after all?
+and **`$E finish <task>`** at the end (it runs require, report and close, and stops at the first
+refusal; exit 2 anywhere = read `--help`, fix, retry). Nothing to do after all?
 `$E episode close <task> --abandon --reason "..."`. Stakes decide only how much sits between: toy = you do the work
 yourself, no units, no checker; internal = plus an independent checker; production = plus
 `checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
@@ -49,7 +57,8 @@ Builders never read them; every scenario needs a checker verdict before the task
 
 Trivial or small work: do it yourself. Otherwise cut the task into units of one plan item:
 
-1. `$E unit start <task> --title "<item>" --kind build|read|check --scope <globs>` → `U-nnn`
+1. `$E unit start <task> --title "<item>" --kind build|read|check --scope <globs> --criterion AC-n` → `U-nnn`
+   (the criterion it serves: a unit serving nothing is scope creep, a criterion nobody serves is dropped)
 2. Build units claim the pen: `$E writer claim <task> --unit U-nnn`. **One writer per
    workspace.** Parallel build units only on disjoint scopes in separate worktrees.
 3. Post what others need on the board, never in prose to yourself:
@@ -82,7 +91,7 @@ it, show the exact command, and stop.
 
 ## Checklists (load on demand from `~/.claude/eaos/checklists/`)
 
-intake · build · research · review · security · test-adequacy · verdict · deploy-rehearsal ·
+goal · intake · build · research · review · security · test-adequacy · verdict · deploy-rehearsal ·
 operability · incident · reporting. Load one when its trigger applies; do not load all.
 
 ## Finish
@@ -90,8 +99,7 @@ operability · incident · reporting. Load one when its trigger applies; do not 
 Every criterion has a verdict with evidence: `verified | failed | blocked | not_reproducible |
 manual_confirmation_required`. Nothing that did not execute is `verified`. Every high or
 blocking risk on the board has a verdict (`--criterion R-B-nnn`), and every scenario has been
-graded by the checker (`$E scenario grade`). Then
-`$E verify <task> --require` (0 or 3), `$E report <task>`, `$E episode close <task>`.
+graded by the checker (`$E scenario grade`). Then `$E finish <task>` (0, or 3 = conditional).
 Write `final-report.md` from `~/.claude/eaos/templates/final-report.md` and paste it to the
 human: what was asked, built, checked with proof, decided, not done, and what needs them.
 

@@ -76,6 +76,19 @@ You type the task. The agent then, on its own:
 6. Closes with a verdict the runtime computes (`verified`, `conditional-manual`, `partial`,
    `unverified`) and a final report: asked, built, checked with proof, decided, not done, needs you.
 
+### When the ask is bigger than one chat
+
+Same command. The agent recognises a product, a feature set or a backlog and opens a **goal**:
+
+1. It writes an **intent contract** (requirements, constraints, non-goals, acceptance), shows it to
+   you, and locks it by hash once you agree. Later changes need a recorded reason.
+2. It breaks the goal into work items. Each item names the requirement it serves. The runtime refuses
+   a plan with a requirement nobody serves or an item that serves nothing.
+3. Each item runs as a normal task, **one per chat**. In a new chat you type `/agentic-os next`.
+4. `/agentic-os status` prints requirement, items, verdicts, evidence.
+5. At the end an independent checker grades the acceptance lines against the finished whole. A goal
+   cannot finish while an item failed, a requirement is unserved, or an acceptance line is ungraded.
+
 It always stops for you before: push or merge to a shared branch, deploy, migration, spending money,
 deleting data, rewriting history on a branch the task did not create.
 
@@ -88,6 +101,8 @@ You never run the runtime script. The agent does, the way it runs `git`.
 | Board, snapshot-bound evidence, scenarios, verdict rules, refusals | enforced | enforced (same script) |
 | Independent checker | isolated subagent | a new chat you open with the supplied packet |
 | Parallel read-only researchers | subagents | not available |
+| Goals: locked intent, item traceability, acceptance of the whole | enforced | enforced (same script) |
+| Scenario store unreachable by tools; one writer per workspace | hooks (not against a disguised shell command or `sed`) | not available |
 | Spawn budget, session binding, stop-time audit, context size | hooks | not available |
 
 `eaos/adapters/README.md` has the full table. `eaos/adapters/AGENTS.md` is a drop-in for hosts that read
@@ -95,9 +110,11 @@ You never run the runtime script. The agent does, the way it runs `git`.
 
 ## Status, honestly
 
-v4.2.0. Twelve real runs on a private production codebase were reviewed and every defect they
+v4.3.0. Twelve real runs on a private production codebase were reviewed and every defect they
 exposed was fixed (`lab/evals/results/2026-09-18-v4-first-runs.md`). In those runs the checker caught
 real bugs three times, no session compacted, and tasks used 1 to 4 subagents.
+
+The goal level is new in v4.3.0 and has passed its tests but no real multi-chat goal yet.
 
 Not yet shown: that EAOS beats the same model with no EAOS. The controlled experiment is
 pre-registered and its grader is built, but it has not been run. The Cursor and Codex path is built
@@ -113,7 +130,7 @@ Three folders. The product is `eaos/`, about thirty files, and it is all the ins
 | `install.sh`, `setup.sh` | one-step installer; the installer proper (`--dry-run`, `--uninstall`) |
 | `eaos/agentic-os.md` | the front door, about 100 lines, loaded once per context |
 | `eaos/agents/` | builder, reader, checker: tool-scoped boundaries, no personas |
-| `eaos/checklists/` | eleven, loaded on demand: intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
+| `eaos/checklists/` | twelve, loaded on demand: goal, intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
 | `eaos/runtime/` | `eaos` (the script the agent runs), the Claude Code hook and its installer, doctor, `routing.yaml` |
 | `eaos/adapters/` | skill header for Cursor and Codex, `AGENTS.md` fallback, solo-mode procedure, capability table |
 | `eaos/templates/` | final report, ADR, task spec, test plan and the other documents the checklists name |

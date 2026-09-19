@@ -62,9 +62,12 @@ QUOTED = shlex.quote(hook_path)   # a CLAUDE_HOME with spaces must still exec (m
 PRETOOL_CMD = f"{QUOTED} pretool"
 POSTTOOL_CMD = f"{QUOTED} posttool"
 STOP_CMD = f"{QUOTED} stop"
+GUARD_CMD = f"{QUOTED} guard"
+GUARD_MATCHER = "Read|Grep|Glob|Bash|Edit|Write|MultiEdit|NotebookEdit"
 PRETOOL_MATCHER = "Task|Agent"
 POSTTOOL_MATCHER = "Bash"
 EVENTS = (("PreToolUse", PRETOOL_CMD, PRETOOL_MATCHER),
+          ("PreToolUse", GUARD_CMD, GUARD_MATCHER),
           ("PostToolUse", POSTTOOL_CMD, POSTTOOL_MATCHER),
           ("Stop", STOP_CMD, None))
 

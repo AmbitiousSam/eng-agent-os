@@ -153,3 +153,17 @@ tool invocation this hook's matcher doesn't cover — gets prompt-level instruct
 `eaos audit` only, exactly like before M-007 existed. Hooks narrow the bypass window; they
 do not close every path to it. And by rule 4 above, a session the hook cannot
 unambiguously place gets no acceleration rather than a wrong attribution.
+
+## Guard (PreToolUse on Read, Grep, Glob, Bash, Edit, Write, MultiEdit, NotebookEdit)
+
+Two boundaries that were advisory until a hook could hold them. Both fail open on anything unexpected.
+
+**Scenario store.** Nobody needs direct file access to it: the lead writes scenarios and the checker
+reads them through `eaos scenario ...`, whose command text never names the path. A tool call aimed
+inside the store, or a Bash command that names it, is refused (exit 2, reason shown to the model).
+Limit: a shell command that hides the path behind a variable or a glob is not caught.
+
+**The pen.** An Edit or Write is refused when the workspace lease (`.eaos/writer.json`) is held by a
+different, still-active task than the one this session is bound to. No lease, no binding, a closed
+holder, a path under `.eaos/`, or a file outside any EAOS workspace: allowed. Limit: `sed`, redirects
+and generators are not gated.

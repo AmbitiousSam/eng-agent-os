@@ -51,7 +51,7 @@ for f in commands/agentic-os.md agents/eaos-builder.md agents/eaos-checker.md ag
   [ -e "$HOME_T/$f" ] && ok "installed: $f" || bad "missing after install: $f"
 done
 n_cl="$(ls "$HOME_T/eaos/checklists"/*.md 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "11 checklists installed" "11" "$n_cl"
+assert_eq "every repo checklist installed" "$(ls "$REPO/eaos/checklists"/*.md | wc -l | tr -d " ")" "$n_cl"
 echo "=== second run is a no-op ==="
 before="$(find "$HOME_T" -type f | wc -l | tr -d ' ')"
 bash "$REPO/setup.sh" >/dev/null 2>&1

@@ -1408,6 +1408,22 @@ def require_status(state):
         if not v or not isinstance(v.get("seq"), int):
             return False
         return v["seq"] > int(r.get("seq", 0) or 0)
+    # Drift, deterministically (no "alignment engine"): a criterion declared at intake that
+    # never got a verdict is a DROPPED requirement; a unit that names a criterion nobody
+    # graded built something nobody checked.
+    dropped = [c for c in state.get("criteria_ids", []) if c not in criteria]
+    if dropped:
+        return (False, "criterion declared at intake without a verdict (dropped requirement?): "
+                + ", ".join(dropped), [], [])
+    unserved = sorted({c for u in (state.get("units") or {}).values()
+                       if u.get("status") != "cancelled"
+                       for c in u.get("serves", []) if c not in criteria})
+    if unserved:
+        return (False, "unit(s) serve a criterion that has no verdict: " + ", ".join(unserved), [], [])
+    if state.get("kind") == "goal":
+        g_ok, g_reason = goal_completion(state)
+        if not g_ok:
+            return False, g_reason, [], []
     ungraded = [sid for sid in state.get("scenarios", []) if sid not in criteria]
     if ungraded:
         return (False, "scenario(s) without a verdict: " + ", ".join(ungraded) +
@@ -2505,7 +2521,8 @@ def cmd_unit(args):
                           "board_rev": board_of(state)["revision"],
                           "snapshot": compute_snapshot(cfg), "started": ts,
                           "seq": next_seq(state), "reconciled": [], "stale_by": None,
-                          "handoff": None}
+                          "handoff": None,
+                          "serves": [c.strip() for c in (args.criterion or "").split(",") if c.strip()]}
             save_state(args.id, state)
             warroom_log(args.id, f"[{ts}] UNIT START {uid} kind={args.kind} "
                                   f"board_rev={units[uid]['board_rev']} "
@@ -3097,6 +3114,289 @@ def cmd_scenario(args):
                                           if verdict == "failed" else ""))
         sys.exit(0)
 
+# ---------- goal level: one goal, many tasks, many chats ----------
+# A goal is a task of kind=goal. Its INTENT CONTRACT (requirements R-n, acceptance A-n,
+# constraints, non-goals) is locked by hash; work items are ordinary tasks that name the
+# requirements they serve; the goal finishes only when every item closed with an honest
+# verdict, every requirement has a verified item, and every acceptance line was graded on
+# the goal itself (`eaos verify <goal> --criterion A-n ...`, by a clean-context checker).
+# Items are linked by a `goal` field, NOT by `parent`: a parent tree pools the spawn
+# budget, and ten items must not share one task's fifteen spawns.
+
+GOAL_ITEM_KINDS = {"investigate": "question", "build": "feature", "fix": "bug", "ship": "chore"}
+GOAL_OK_VERDICTS = ("verified", "conditional-manual")
+_ID_LINE = r"^\s*(?:[-*]\s*)?(?:\*\*)?(%s-\d+)\b"
+
+def goal_intent_path(goal_id):
+    return os.path.join(task_dir(goal_id), "intent.md")
+
+def goal_parse_ids(text):
+    reqs, accs = [], []
+    for ln in text.splitlines():
+        for prefix, bucket in (("R", reqs), ("A", accs)):
+            m = re.match(_ID_LINE % prefix, ln)
+            if m and m.group(1) not in bucket:
+                bucket.append(m.group(1))
+    return reqs, accs
+
+def goal_of(state):
+    if state.get("kind") != "goal":
+        die("not a goal: create one with `eaos task new \"<title>\" --kind goal`", 2)
+    return state.setdefault("goal", {"intent_sha": None, "locked_at": None, "requirements": [],
+                                     "acceptance": [], "amendments": [], "items": []})
+
+def goal_intent_intact(goal_id, g):
+    """True when the stored contract still hashes to what was locked."""
+    if not g.get("intent_sha"):
+        return False
+    try:
+        with open(goal_intent_path(goal_id), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest() == g["intent_sha"]
+    except OSError:
+        return False
+
+def goal_item_verdict(tid):
+    """(status, verdict) of an item task, read from ITS records — never from a claim."""
+    try:
+        st = load_state(tid)
+    except SystemExit:
+        return "missing", None
+    eps = read_episode_lines_for_task(tid)
+    return st.get("status"), (eps[-1].get("verdict") if eps else None)
+
+def goal_plan_problems(g):
+    problems = []
+    reqs, items = g.get("requirements", []), g.get("items", [])
+    ids = {i["task"] for i in items}
+    for r in reqs:
+        if not any(r in i["serves"] for i in items):
+            problems.append(f"{r} is served by no item (dropped requirement)")
+    for i in items:
+        if i["kind"] != "investigate" and not i["serves"]:
+            problems.append(f"{i['task']} '{i['title']}' serves no requirement (scope creep)")
+        for r in i["serves"]:
+            if r not in reqs:
+                problems.append(f"{i['task']} serves {r}, which is not in the intent contract")
+        for a in i.get("after", []):
+            if a not in ids:
+                problems.append(f"{i['task']} waits on {a}, which is not an item of this goal")
+    after = {i["task"]: list(i.get("after", [])) for i in items}
+    state_of = {}
+    def cyc(n):
+        if state_of.get(n) == 1:
+            return True
+        if state_of.get(n) == 2:
+            return False
+        state_of[n] = 1
+        hit = any(cyc(m) for m in after.get(n, []) if m in after)
+        state_of[n] = 2
+        return hit
+    if any(cyc(n) for n in after):
+        problems.append("the items' --after links form a cycle")
+    return problems
+
+def goal_completion(state):
+    g = state.get("goal") or {}
+    gid = state.get("id")
+    if not g.get("intent_sha"):
+        return False, "goal intent is not locked (`eaos goal intent` then `eaos goal lock`)"
+    if not goal_intent_intact(gid, g):
+        return False, ("the intent contract changed after it was locked — restore it or record "
+                       "the change with `eaos goal amend --reason`")
+    problems = goal_plan_problems(g)
+    if problems:
+        return False, "plan does not cover the intent: " + "; ".join(problems)
+    if not g.get("items"):
+        return False, "goal has no work items"
+    bad = []
+    for i in g["items"]:
+        status, verdict = goal_item_verdict(i["task"])
+        if status != "closed" or verdict not in GOAL_OK_VERDICTS:
+            bad.append(f"{i['task']} ({status}, verdict={verdict or 'none'})")
+    if bad:
+        return False, "item(s) not closed with an honest pass: " + ", ".join(bad)
+    criteria = state.get("criteria", {})
+    ungraded = [a for a in g.get("acceptance", []) if a not in criteria]
+    if ungraded:
+        return False, ("acceptance line(s) without a verdict: " + ", ".join(ungraded) +
+                       " — graded on the goal by a clean-context checker, by execution")
+    return True, ""
+
+def cmd_goal(args):
+    gid = args.id
+    task_dir(gid)
+    ts = now_iso()
+    if args.goal_cmd in ("intent", "amend"):
+        if not os.path.isfile(args.file):
+            die(f"no such file: {args.file}", 2)
+        with open(args.file, encoding="utf-8") as f:
+            text = f.read()
+        reqs, accs = goal_parse_ids(text)
+        if not reqs or not accs:
+            die("intent contract needs at least one requirement line starting `R-1` and one "
+                "acceptance line starting `A-1` (see templates/intent.md)", 2)
+        with task_lock(gid):
+            state = load_state(gid)
+            g = goal_of(state)
+            if args.goal_cmd == "intent" and g.get("intent_sha"):
+                die("intent is locked — change it with `eaos goal amend --file ... --reason ...`", 1)
+            if args.goal_cmd == "amend":
+                if not g.get("intent_sha"):
+                    die("nothing to amend: the intent was never locked", 1)
+                if not args.reason:
+                    die("goal amend: --reason is mandatory", 2)
+            with open(goal_intent_path(gid), "w", encoding="utf-8") as f:
+                f.write(text)
+            g["requirements"], g["acceptance"] = reqs, accs
+            if args.goal_cmd == "amend":
+                old = g["intent_sha"]
+                g["intent_sha"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                g["amendments"].append({"at": ts, "reason": args.reason, "from": old,
+                                        "to": g["intent_sha"]})
+                warroom_log(gid, f"[{ts}] GOAL INTENT AMENDED reason={args.reason} "
+                                  f"{old[:12]} -> {g['intent_sha'][:12]}")
+            else:
+                warroom_log(gid, f"[{ts}] GOAL INTENT recorded requirements={reqs} acceptance={accs}")
+            save_state(gid, state)
+        print(f"OK: intent recorded ({len(reqs)} requirements, {len(accs)} acceptance lines)"
+              + ("" if args.goal_cmd == "amend" else " — show it to the human, then `eaos goal lock`"))
+        sys.exit(0)
+    if args.goal_cmd == "lock":
+        with task_lock(gid):
+            state = load_state(gid)
+            g = goal_of(state)
+            if g.get("intent_sha"):
+                die("already locked", 1)
+            try:
+                with open(goal_intent_path(gid), "rb") as f:
+                    g["intent_sha"] = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                die("no intent recorded yet: `eaos goal intent <goal> --file intent.md`", 1)
+            g["locked_at"] = ts
+            save_state(gid, state)
+            warroom_log(gid, f"[{ts}] GOAL INTENT LOCKED sha={g['intent_sha'][:12]}")
+        print(f"OK: intent locked {g['intent_sha'][:12]}")
+        sys.exit(0)
+    if args.goal_cmd == "item":
+        if args.kind not in GOAL_ITEM_KINDS:
+            die(f"goal item: --kind must be one of {', '.join(GOAL_ITEM_KINDS)}", 2)
+        state = load_state(gid)
+        g = goal_of(state)
+        if not g.get("intent_sha"):
+            die("lock the intent before adding items (`eaos goal lock`)", 1)
+        serves = [x.strip() for x in (args.serves or "").split(",") if x.strip()]
+        after = [x.strip() for x in (args.after or "").split(",") if x.strip()]
+        unknown = [r for r in serves if r not in g["requirements"]]
+        if unknown:
+            die(f"--serves names {', '.join(unknown)}, not in the intent contract "
+                f"({', '.join(g['requirements'])})", 2)
+        cmd = [sys.executable, os.path.abspath(__file__), "task", "new", args.title,
+               "--kind", GOAL_ITEM_KINDS[args.kind], "--stakes", args.stakes or state.get("stakes") or "internal",
+               "--allow-duplicate", "--reason", f"work item of goal {gid}"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        tid = next((ln.strip() for ln in reversed(r.stdout.splitlines())
+                    if re.fullmatch(r"T-\d+", ln.strip())), None)
+        if r.returncode != 0 or not tid:
+            die(f"could not create the item task: {(r.stdout + r.stderr).strip()[-300:]}", 1)
+        with task_lock(tid):
+            ist = load_state(tid)
+            ist["goal"] = gid
+            ist["serves"] = serves
+            save_state(tid, ist)
+        with task_lock(gid):
+            state = load_state(gid)
+            g = goal_of(state)
+            g["items"].append({"task": tid, "title": args.title, "kind": args.kind,
+                               "serves": serves, "after": after, "at": ts})
+            save_state(gid, state)
+            warroom_log(gid, f"[{ts}] GOAL ITEM {tid} kind={args.kind} serves={serves} after={after} title={args.title}")
+        print(tid)
+        sys.exit(0)
+    state = load_state(gid)
+    g = goal_of(state)
+    if args.goal_cmd == "check":
+        problems = goal_plan_problems(g)
+        if g.get("intent_sha") and not goal_intent_intact(gid, g):
+            problems.insert(0, "the intent contract changed after it was locked")
+        if problems:
+            print("REFUSED: the plan does not cover the intent:")
+            for pr in problems:
+                print(f"  - {pr}")
+            sys.exit(1)
+        print(f"OK: {len(g['items'])} items cover {len(g['requirements'])} requirements")
+        sys.exit(0)
+    rows = [(i, *goal_item_verdict(i["task"])) for i in g.get("items", [])]
+    done = {i["task"] for i, st, v in rows if st == "closed" and v in GOAL_OK_VERDICTS}
+    if args.goal_cmd == "next":
+        for i, st, v in rows:
+            if st == "closed":
+                continue
+            waiting = [a for a in i.get("after", []) if a not in done]
+            if waiting:
+                continue
+            print(f"NEXT: {i['task']} [{i['kind']}] {i['title']}")
+            print(f"serves: {', '.join(i['serves']) or '(nothing: an investigation)'}")
+            try:
+                with open(goal_intent_path(gid), encoding="utf-8") as f:
+                    for ln in f.read().splitlines():
+                        m = re.match(_ID_LINE % "R", ln)
+                        if m and m.group(1) in i["serves"]:
+                            print(f"  {ln.strip()}")
+            except OSError:
+                pass
+            print(f"run it as its own task in a fresh context: eaos status --packet {i['task']}")
+            sys.exit(0)
+        open_items = [i["task"] for i, st, v in rows if st != "closed"]
+        failed = [f"{i['task']}={v}" for i, st, v in rows if st == "closed" and v not in GOAL_OK_VERDICTS]
+        if open_items or failed:
+            print("BLOCKED: no item is ready. open: " + (", ".join(open_items) or "-")
+                  + "; closed without a pass: " + (", ".join(failed) or "-"))
+            sys.exit(3)
+        print("ALL ITEMS CLOSED: grade the acceptance lines on the goal with a clean-context "
+              f"checker, then `eaos finish {gid}`")
+        sys.exit(0)
+    if args.goal_cmd == "status":
+        print(f"# Goal {gid}: {state.get('title')}")
+        print(f"intent: {'LOCKED ' + g['intent_sha'][:12] if g.get('intent_sha') else 'not locked'}"
+              f"{'' if not g.get('intent_sha') or goal_intent_intact(gid, g) else '  ** CHANGED AFTER LOCK **'}"
+              f"   amendments: {len(g.get('amendments', []))}")
+        print("\n| Requirement | Items | Verdicts |\n|---|---|---|")
+        for r in g.get("requirements", []):
+            its = [(i, st, v) for i, st, v in rows if r in i["serves"]]
+            print(f"| {r} | {', '.join(i['task'] for i, _, _ in its) or '**none**'} | "
+                  f"{', '.join((v or st or '?') for _, st, v in its) or '-'} |")
+        loose = [i["task"] for i, _, _ in rows if not i["serves"]]
+        if loose:
+            print(f"\nitems serving no requirement: {', '.join(loose)}")
+        print("\n| Acceptance | Verdict | Evidence |\n|---|---|---|")
+        crit = state.get("criteria", {})
+        for a in g.get("acceptance", []):
+            c = crit.get(a, {})
+            print(f"| {a} | {c.get('verdict', 'ungraded')} | {(c.get('evidence') or '-')[:100]} |")
+        ok, reason = goal_completion(state)
+        print(f"\ncompletion: {'READY for `eaos finish`' if ok else 'not yet — ' + reason}")
+        sys.exit(0)
+
+# ---------- finish: the three closing commands as one, stopping at the first refusal ----------
+# Run 10: a mistyped `verify` chained with `episode close` shut a task nobody had judged.
+def cmd_finish(args):
+    me = [sys.executable, os.path.abspath(__file__)]
+    r = subprocess.run(me + ["verify", args.id, "--require"], capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    if r.returncode not in (0, 3):
+        print("FINISH STOPPED: not ready. Nothing was reported or closed.")
+        sys.exit(r.returncode or 1)
+    conditional = r.returncode == 3
+    for step in (["report", args.id], ["episode", "close", args.id]):
+        r2 = subprocess.run(me + step, capture_output=True, text=True)
+        sys.stdout.write(r2.stdout)
+        sys.stderr.write(r2.stderr)
+        if r2.returncode not in (0, 3):
+            print(f"FINISH STOPPED at `{' '.join(step[:-1])}` (exit {r2.returncode}).")
+            sys.exit(r2.returncode)
+    sys.exit(3 if conditional else 0)
+
 # ---------- argparse wiring ----------
 
 def build_parser():
@@ -3266,6 +3566,8 @@ def build_parser():
     p_us.add_argument("--title", required=True)
     p_us.add_argument("--kind", default="build")
     p_us.add_argument("--scope", default=None, help="comma-separated path globs")
+    p_us.add_argument("--criterion", default=None,
+                      help="comma-separated criterion ids this unit serves (traceability)")
     p_us.set_defaults(func=cmd_unit)
     p_uh = unit_sub.add_parser("handoff")
     p_uh.add_argument("id")
@@ -3365,6 +3667,32 @@ def build_parser():
     p_sg.add_argument("--verdict", required=True)
     p_sg.add_argument("--evidence", default=None)
     p_sg.set_defaults(func=cmd_scenario)
+
+    p_fin = sub.add_parser("finish", help="verify --require, report, episode close; stops at the first refusal")
+    p_fin.add_argument("id")
+    p_fin.set_defaults(func=cmd_finish)
+
+    p_goal = sub.add_parser("goal", help="goal level: intent contract, work items, traceability")
+    goal_sub = p_goal.add_subparsers(dest="goal_cmd", required=True)
+    for name in ("intent", "amend"):
+        gp = goal_sub.add_parser(name)
+        gp.add_argument("id")
+        gp.add_argument("--file", required=True)
+        if name == "amend":
+            gp.add_argument("--reason", default=None)
+        gp.set_defaults(func=cmd_goal)
+    for name in ("lock", "check", "next", "status"):
+        gp = goal_sub.add_parser(name)
+        gp.add_argument("id")
+        gp.set_defaults(func=cmd_goal)
+    gp = goal_sub.add_parser("item")
+    gp.add_argument("id")
+    gp.add_argument("--title", required=True)
+    gp.add_argument("--kind", default="build")
+    gp.add_argument("--serves", default=None, help="comma-separated requirement ids (R-1,R-3)")
+    gp.add_argument("--after", default=None, help="comma-separated item task ids this one waits on")
+    gp.add_argument("--stakes", default=None)
+    gp.set_defaults(func=cmd_goal)
 
     p_audit = sub.add_parser("audit")
     p_audit.add_argument("id")

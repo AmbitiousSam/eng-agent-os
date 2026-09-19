@@ -120,7 +120,7 @@ for a in found:
         f"agents/{a}.md: no persona costume")
 
 # ---------- 4. checklists named by the front door exist, with frontmatter ----------
-CHECKLISTS = ["intake", "build", "research", "review", "security", "test-adequacy", "verdict",
+CHECKLISTS = ["goal", "intake", "build", "research", "review", "security", "test-adequacy", "verdict",
               "deploy-rehearsal", "operability", "incident", "reporting"]
 for c in CHECKLISTS:
     rel = f"checklists/{c}.md"

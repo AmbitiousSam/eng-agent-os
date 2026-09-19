@@ -121,3 +121,19 @@ New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditiona
 - `scenario add|list|grade` — evaluator scenarios (K-2/K-3): written at intake from
   disclosed requirements, stored outside the workspace, listed to the checker only, graded by
   execution; `verify --require` refuses while any is ungraded; a failure marks it revealed.
+
+## v4.3.0 additions (2026-09-19)
+
+- `finish <task>`: `verify --require`, `report`, `episode close` in order; stops at the first refusal and
+  closes nothing. Exit 0, or 3 when conditional. Replaces three chained commands (run 10).
+- `unit start ... --criterion AC-n[,AC-m]`: the criteria a unit serves. `require_status` refuses a unit
+  serving a criterion with no verdict, and a criterion declared at `task new --criteria` with no verdict.
+- `goal intent|lock|amend|item|check|next|status <goal>`: a goal is a task of `--kind goal`. Intent
+  contract with `R-n` and `A-n` lines, locked by sha256, changed only by `amend --reason`. Items are
+  ordinary tasks linked by a `goal` field (not `parent`, which would pool the spawn budget). `check`
+  refuses an unserved requirement, an item serving nothing (investigations excepted), an unknown
+  requirement id, a cycle, a contract changed after lock. Completion is read from the items' own episode
+  records; acceptance lines are criteria on the goal; all of it flows through `require_status`, so
+  `verify --require`, `report`, `episode close` and `finish` agree.
+- Hook mode `guard` (PreToolUse): scenario store unreachable by tools; Edit/Write refused while a
+  different active task holds the workspace pen.

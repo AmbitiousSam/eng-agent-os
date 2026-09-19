@@ -2780,5 +2780,156 @@ class TestCloseNeedsAJudgement(V4Case):
         self.assertEqual(rc, 0, err)
 
 
+class TestFinish(V4Case):
+    """Run 10: one verb for the three closing commands; it stops at the first refusal."""
+
+    def test_finish_refuses_and_closes_nothing_when_not_ready(self):
+        rc, out, err = run(self.cwd, "finish", self.tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("FINISH STOPPED", out)
+        self.assertEqual(run(self.cwd, "status", self.tid)[0], 0)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            self.assertNotEqual(json.load(f)["status"], "closed")
+
+    def test_finish_closes_a_verified_task(self):
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it: 3 passed")
+        rc, out, err = run(self.cwd, "finish", self.tid)
+        self.assertEqual(rc, 0, out + err)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            self.assertEqual(json.load(f)["status"], "closed")
+
+
+class TestDriftAtTaskLevel(V4Case):
+    def test_criterion_declared_at_intake_without_verdict_is_a_dropped_requirement(self):
+        tid = run(self.cwd, "task", "new", "two criteria", "--kind", "feature", "--criteria", "AC-1,AC-2")[1].strip().splitlines()[-1]
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
+        rc, out, err = run(self.cwd, "verify", tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("AC-2", out)
+
+    def test_unit_serving_an_ungraded_criterion_blocks(self):
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "ran it")
+        uid = run(self.cwd, "unit", "start", self.tid, "--title", "u", "--kind", "read", "--criterion", "AC-9")[1].strip()
+        run(self.cwd, "unit", "handoff", self.tid, uid, "--ready")
+        rc, out, err = run(self.cwd, "verify", self.tid, "--require")
+        self.assertEqual(rc, 1)
+        self.assertIn("AC-9", out)
+
+
+class TestGoalLevel(V4Case):
+    """One goal, many tasks, many chats: locked intent, items that serve requirements,
+    completion read from the items' own records."""
+
+    INTENT = "# Intent\n## Requirements\n- R-1 Links expire after 7 days.\n- **R-2** Unknown slugs return 404.\n## Acceptance\n- A-1 An 8-day-old link does not redirect.\n"
+
+    def setUp(self):
+        super().setUp()
+        self.gid = run(self.cwd, "task", "new", "Link shortener", "--kind", "goal", "--stakes", "internal")[1].strip().splitlines()[-1]
+        self.intent = os.path.join(self.cwd, "intent.md")
+        with open(self.intent, "w") as f:
+            f.write(self.INTENT)
+
+    def lock(self):
+        self.assertEqual(run(self.cwd, "goal", "intent", self.gid, "--file", self.intent)[0], 0)
+        self.assertEqual(run(self.cwd, "goal", "lock", self.gid)[0], 0)
+
+    def item(self, title, serves, after=None, kind="build"):
+        a = ["goal", "item", self.gid, "--title", title, "--kind", kind]
+        if serves:
+            a += ["--serves", serves]
+        if after:
+            a += ["--after", after]
+        rc, out, err = run(self.cwd, *a)
+        self.assertEqual(rc, 0, out + err)
+        return out.strip().splitlines()[-1]
+
+    def close_item(self, tid, verdict="verified"):
+        run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", verdict, "--evidence", "executed: observed the result")
+        return run(self.cwd, "finish", tid)[0]
+
+    def test_goal_verbs_refuse_a_non_goal_task(self):
+        self.assertEqual(run(self.cwd, "goal", "lock", self.tid)[0], 2)
+
+    def test_intent_needs_requirement_and_acceptance_ids(self):
+        with open(self.intent, "w") as f:
+            f.write("# just prose\n")
+        self.assertEqual(run(self.cwd, "goal", "intent", self.gid, "--file", self.intent)[0], 2)
+
+    def test_items_need_a_locked_intent_and_known_requirements(self):
+        run(self.cwd, "goal", "intent", self.gid, "--file", self.intent)
+        self.assertEqual(run(self.cwd, "goal", "item", self.gid, "--title", "x", "--serves", "R-1")[0], 1)
+        run(self.cwd, "goal", "lock", self.gid)
+        self.assertEqual(run(self.cwd, "goal", "item", self.gid, "--title", "x", "--serves", "R-9")[0], 2)
+
+    def test_locked_intent_cannot_be_replaced_only_amended_with_reason(self):
+        self.lock()
+        self.assertEqual(run(self.cwd, "goal", "intent", self.gid, "--file", self.intent)[0], 1)
+        self.assertEqual(run(self.cwd, "goal", "amend", self.gid, "--file", self.intent)[0], 2)
+        with open(self.intent, "a") as f:
+            f.write("- R-3 Slugs are 7 characters.\n")
+        self.assertEqual(run(self.cwd, "goal", "amend", self.gid, "--file", self.intent, "--reason", "human added R-3")[0], 0)
+        rc, out, err = run(self.cwd, "goal", "check", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn("R-3", out)
+
+    def test_plan_check_refuses_dropped_requirement_scope_creep_and_cycle(self):
+        self.lock()
+        a = self.item("expiry", "R-1")
+        rc, out, err = run(self.cwd, "goal", "check", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn("R-2 is served by no item", out)
+        self.item("gold plating", None)
+        self.assertIn("serves no requirement", run(self.cwd, "goal", "check", self.gid)[1])
+
+    def test_tampered_intent_is_detected(self):
+        self.lock()
+        with open(os.path.join(self.cwd, ".eaos", self.gid, "intent.md"), "a") as f:
+            f.write("- R-7 quietly added\n")
+        rc, out, err = run(self.cwd, "goal", "check", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn("changed after it was locked", out)
+
+    def test_next_respects_order_and_items_do_not_pool_the_spawn_budget(self):
+        self.lock()
+        a = self.item("expiry", "R-1")
+        b = self.item("404s", "R-2", after=a)
+        self.assertIn(a, run(self.cwd, "goal", "next", self.gid)[1])
+        with open(os.path.join(self.cwd, ".eaos", b, "state.json")) as f:
+            st = json.load(f)
+        self.assertIsNone(st.get("parent"))
+        self.assertEqual(st.get("goal"), self.gid)
+        self.assertEqual(self.close_item(a), 0)
+        self.assertIn(b, run(self.cwd, "goal", "next", self.gid)[1])
+
+    def test_goal_finishes_only_from_the_items_own_records_and_graded_acceptance(self):
+        self.lock()
+        a = self.item("expiry", "R-1")
+        b = self.item("404s", "R-2")
+        run(self.cwd, "verify", self.gid, "--criterion", "A-1", "--verdict", "verified", "--evidence", "GET /old -> 410")
+        rc, out, err = run(self.cwd, "finish", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn(a, out)
+        self.close_item(a)
+        self.close_item(b, verdict="failed")
+        rc, out, err = run(self.cwd, "finish", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn(b, out)
+
+    def test_goal_finish_needs_every_acceptance_line_graded(self):
+        self.lock()
+        for t in (self.item("expiry", "R-1"), self.item("404s", "R-2")):
+            self.assertEqual(self.close_item(t), 0)
+        self.assertEqual(run(self.cwd, "goal", "next", self.gid)[0], 0)
+        run(self.cwd, "verify", self.gid, "--criterion", "NOTE-1", "--verdict", "verified", "--evidence", "something else ran")
+        rc, out, err = run(self.cwd, "finish", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn("A-1", out)
+        run(self.cwd, "verify", self.gid, "--criterion", "A-1", "--verdict", "verified", "--evidence", "GET /old -> 410")
+        status = run(self.cwd, "goal", "status", self.gid)[1]
+        self.assertIn("READY", status)
+        self.assertIn("| R-2 |", status)
+        self.assertEqual(run(self.cwd, "finish", self.gid)[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

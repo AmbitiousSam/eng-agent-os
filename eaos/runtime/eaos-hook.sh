@@ -41,11 +41,87 @@ set -u
 
 mode="${1:-}"
 case "$mode" in
-  pretool|posttool|stop) ;;
+  pretool|posttool|stop|guard) ;;
   *) exit 0 ;;   # unknown/missing mode: never wedge an unrecognized invocation
 esac
 
 command -v python3 >/dev/null 2>&1 || exit 0
+
+# ---- guard: two boundaries that were advisory until a hook could hold them ----------------
+# (1) SCENARIO STORE. Nobody needs direct file access to it: the lead writes scenarios and the
+#     checker reads them through `eaos scenario ...`, whose command text never names the path.
+#     Any Read/Grep/Glob/Edit/Write aimed inside it, or a Bash command that names it, is refused.
+#     Honest limit: a shell command that hides the path (variables, globbing) still gets through.
+# (2) THE PEN. One writer per workspace: an Edit/Write is refused when the workspace lease is
+#     held by a DIFFERENT active task than the one this session is bound to. No lease, no
+#     binding, or a file outside any EAOS workspace = allowed. `sed`/redirects are not covered.
+# Fails open on anything unexpected. Exit 2 blocks and shows stderr to the model.
+if [ "$mode" = "guard" ]; then
+  HOOK_JSON="$(cat)" CLAUDE_HOME_DIR="${CLAUDE_HOME:-$HOME/.claude}" python3 - <<'PY' || exit $?
+import json, os, sys
+try:
+    d = json.loads(os.environ.get("HOOK_JSON") or "{}")
+    tool = str(d.get("tool_name") or "")
+    ti = d.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        sys.exit(0)
+    root = os.environ.get("EAOS_SCENARIO_HOME") or os.path.join(os.environ["CLAUDE_HOME_DIR"], "eaos", "scenarios")
+    roots = {os.path.abspath(os.path.expanduser(root))}
+    roots.add(os.path.realpath(next(iter(roots))))
+    def inside(path):
+        if not isinstance(path, str) or not path:
+            return False
+        ap = os.path.abspath(os.path.expanduser(path))
+        rp = os.path.realpath(ap)
+        return any(x == r or x.startswith(r + os.sep) for r in roots for x in (ap, rp))
+    refuse = ("EAOS: the scenario store is off limits to direct access. Builders never read it; "
+              "the checker uses `eaos scenario list <task> --for checker`.")
+    if tool == "Bash":
+        cmd = str(ti.get("command") or "")
+        if "eaos/scenarios" in cmd or any(r in cmd for r in roots):
+            print(refuse, file=sys.stderr); sys.exit(2)
+        sys.exit(0)
+    paths = [ti.get(k) for k in ("file_path", "path", "notebook_path")]
+    if any(inside(x) for x in paths) or any(r in str(ti.get("pattern") or "") for r in roots):
+        print(refuse, file=sys.stderr); sys.exit(2)
+    if tool not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        sys.exit(0)
+    target = next((x for x in paths if isinstance(x, str) and x), None)
+    sid = str(d.get("session_id") or "")
+    if not target or not sid:
+        sys.exit(0)
+    cur = os.path.dirname(os.path.abspath(os.path.expanduser(target)))
+    ws = None
+    while True:
+        if os.path.isdir(os.path.join(cur, ".eaos")):
+            ws = cur; break
+        nxt = os.path.dirname(cur)
+        if nxt == cur:
+            break
+        cur = nxt
+    if not ws or os.path.abspath(target).startswith(os.path.join(ws, ".eaos") + os.sep):
+        sys.exit(0)
+    with open(os.path.join(ws, ".eaos", "writer.json"), encoding="utf-8") as f:
+        lease = json.load(f) or {}
+    holder = lease.get("task")
+    with open(os.path.join(ws, ".eaos", "sessions", sid), encoding="utf-8") as f:
+        mine = f.read().strip()
+    if not holder or not mine or holder == mine:
+        sys.exit(0)
+    with open(os.path.join(ws, ".eaos", holder, "state.json"), encoding="utf-8") as f:
+        if json.load(f).get("status") == "closed":
+            sys.exit(0)
+    print(f"EAOS: {holder}/{lease.get('unit')} holds the pen for this workspace and this session "
+          f"works {mine}. One writer per workspace: wait for its handoff, work in a separate "
+          f"worktree, or have the holder run `eaos writer release`.", file=sys.stderr)
+    sys.exit(2)
+except SystemExit:
+    raise
+except Exception:
+    sys.exit(0)
+PY
+  exit 0
+fi
 
 stdin_json="$(cat)" || exit 0
 
