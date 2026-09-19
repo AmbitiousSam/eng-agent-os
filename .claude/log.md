@@ -156,3 +156,6 @@ Bare-prompt run in Claude Code: lead chose toy (correct; my 'internal' predictio
 
 ## 2026-09-19 — run 14 + v4.5.3
 Bare prompt, 16 set-state-in-effect errors, 12 files: lead chose internal, checker spawned, work sound (verified independently, vitest 302/302). Weakness: checker graded scenario verified by reading diffs; scenario written after build; nobody ran tests. Fixes: scenario verified needs --check <id> (executed, current snapshot), LATE flag on scenarios added after code changed, run every check kind. Gates 188/96/31/134.
+
+## 2026-09-19 — run 15
+Real dashboard feature in synergina: one internal task (not a goal), scenarios before first edit, checker failed AC-3 against the lead's own spec and graded mobile manual; finish refused; lead left task ACTIVE for the human. Best run so far; no EAOS change needed. My size predictions (stakes, goal) wrong three runs in a row: the model sizes work better than I do.

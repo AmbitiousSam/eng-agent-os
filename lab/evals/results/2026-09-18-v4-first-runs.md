@@ -136,3 +136,20 @@ Findings -> fixes (v4.5.3):
 2. The single scenario was written after the build. Fix: `scenario add` marks it LATE once the code differs
    from the task's start snapshot (a regression check, not a holdout); front door says before the first edit.
 3. Nobody ran the test suite. Fix: front door and checker definition: run every kind of check the project has.
+
+## Run 15 (v4.5.3, Claude Code) — T-040, real feature, loose prompt: reorganise the user dashboard
+"what to do next, how the job search is going, recent activity; mobile; every feature reachable; reuse the
+visual system; do not slow the page." Lead sized it as ONE internal task, not a goal (it fit: under 4 minutes,
+18 responses, context 75k -> 112k). New branch `feat/t40-user-dashboard-ia`; 46 uncommitted files untouched and
+said so. 7 criteria written from the ask (incl. AC-7 "no new waterfall"), 3 scenarios recorded BEFORE the first
+edit (not LATE), a pure model module with 7 unit tests, checks type/test/lint through the runtime.
+`eaos-checker` spawned, re-ran test and type itself, and:
+- **failed AC-3**: the lead's own spec said activity merges applications, notifications and sessions; the
+  code merges two. A real catch against the maker's own words.
+- graded mobile (AC-4, S-003, R-B-001) `manual_confirmation_required`: "no render possible; human check at
+  375px" (the live render was blocked by login). v4.5.3's rule produced the honest verdict.
+`finish` refused. The lead did **not** overwrite the failed verdict: it posted a decision (B-002: AC-3 wording
+overreached; past sessions cost an extra query; human to accept or ask) and left the task ACTIVE with nothing
+committed. Final message opens "The task is not finished."
+No EAOS change needed. Observation only: nothing in the runtime stops a lead re-recording a checker's `failed`
+as `verified` on the same code; this lead did not try.
