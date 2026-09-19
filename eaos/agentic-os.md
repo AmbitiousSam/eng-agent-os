@@ -36,8 +36,8 @@ and **`$E finish <task>`** at the end (it runs require, report and close, and st
 refusal; exit 2 anywhere = read `--help`, fix, retry). Nothing to do after all?
 `$E episode close <task> --abandon --reason "..."`. **If you changed any file, one check must
 execute through the runtime after your last edit**, at every stakes level:
-`$E check <task> --category lint|test|type|build|other --cmd "<project command>"`; `finish`
-refuses without it. **Before your first edit run `git status --short`**: uncommitted work that is
+`$E check <task> --category lint|test|type|build|other --cmd "<project command>"` (run every
+kind the project has, tests included); `finish` refuses without one. **Before your first edit run `git status --short`**: uncommitted work that is
 not yours? Say so in one line, use a new branch unless told otherwise, never stage, commit or
 revert it.
 Stakes decide only how much sits between: toy = you do the work
@@ -52,7 +52,7 @@ blocking question unless the codebase shows the house pattern; an identity or at
 constraint (author, e-mail form, "only my name") becomes an acceptance criterion. Never add
 `Co-Authored-By` or "Generated with" trailers unless asked. Read `checklists/intake.md`
 for anything beyond a trivial change; record criteria with `$E verify` as you go. At
-internal or production stakes, before any builder runs, write the **scenarios** the checker
+internal or production stakes, **before your first edit**, write the **scenarios** the checker
 will grade — end-to-end expectations from the disclosed requirements, held outside the
 workspace: `$E scenario add <task> --title ... --given ... --when ... --then ... --requirement "<the disclosed requirement>"`.
 Builders never read them; every scenario needs a checker verdict before the task can finish.

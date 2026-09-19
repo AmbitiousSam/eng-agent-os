@@ -153,3 +153,6 @@ User showed Cursor spawning parallel subagents; docs confirm isolated context + 
 
 ## 2026-09-19 — run 13 + v4.5.1
 Bare-prompt run in Claude Code: lead chose toy (correct; my 'internal' prediction was wrong), work verified independently, honest final message. Fixes: executed check required whenever code changed since task start (start_snapshot), dirty-tree notice before first edit, no report file at toy. Gates 185/96/31/133.
+
+## 2026-09-19 — run 14 + v4.5.3
+Bare prompt, 16 set-state-in-effect errors, 12 files: lead chose internal, checker spawned, work sound (verified independently, vitest 302/302). Weakness: checker graded scenario verified by reading diffs; scenario written after build; nobody ran tests. Fixes: scenario verified needs --check <id> (executed, current snapshot), LATE flag on scenarios added after code changed, run every check kind. Gates 188/96/31/134.

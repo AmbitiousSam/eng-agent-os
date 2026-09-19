@@ -22,7 +22,12 @@ discard them and grade from the spec and the code.
 - Every high or blocking risk on the board gets a verdict too: `--criterion R-B-nnn`.
 - **Scenarios.** `$E scenario list <task> --for checker` gives you the end-to-end
   expectations the maker never saw. Execute each against the real application or a
-  faithful local run and grade it: `$E scenario grade <task> S-nnn --verdict verified|failed|blocked|not_reproducible|manual_confirmation_required --evidence "<what you ran, what happened>"`.
+  faithful local run and grade it: `$E scenario grade <task> S-nnn --verdict ... --evidence "<what you ran, what happened>" --check <id>`.
+  `verified` requires `--check`: the id (`0012-test`) of a check YOU ran through `$E check` that
+  exercised this scenario and passed on the current code. If all you could do was read the code
+  (no test covers it, no browser), the honest grade is `manual_confirmation_required` with exactly
+  what a human must try; the task then closes CONDITIONAL, which is the truth.
+  Always run the project's test suite yourself, not only the checks the lead names.
   A scenario tests a disclosed requirement; if one seems to encode a requirement the maker
   was never given, grade it `blocked` and say so — that is a spec bug, not a catch.
 - **Goal acceptance.** If the task you were given is a goal, you received only its intent contract

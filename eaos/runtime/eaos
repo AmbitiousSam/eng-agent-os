@@ -3072,7 +3072,15 @@ def cmd_scenario(args):
                 die("scenario add: --given, --when and --then are all required (an "
                     "end-to-end expectation, not a test name)", 2)
         sid = f"S-{len(items) + 1:03d}"
-        items.append({"id": sid, "title": args.title, "given": args.given, "when": args.when,
+        # Run 14: the one scenario was written AFTER the code changed. A scenario written with
+        # the solution in view is a regression check, not a holdout; say so wherever it is shown.
+        st_now = load_state(args.id)
+        cfg_now = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+        late = bool(st_now.get("start_snapshot")) and compute_snapshot(cfg_now) != st_now["start_snapshot"]
+        if late:
+            print("WARNING: the code already changed in this task. This scenario is recorded as LATE: "
+                  "a regression check, not a holdout. Write scenarios before the first edit.", file=sys.stderr)
+        items.append({"late": late, "id": sid, "title": args.title, "given": args.given, "when": args.when,
                       "then": args.then, "requirement": args.requirement, "at": now_iso(),
                       "revealed": None})
         save_scenarios(args.id, items)
@@ -3094,7 +3102,7 @@ def cmd_scenario(args):
             if args.revealed and not s.get("revealed"):
                 continue
             v = criteria.get(s["id"], {}).get("verdict", "ungraded")
-            print(f"{s['id']} [{v}]{' REVEALED ' + s['revealed'] if s.get('revealed') else ''}: "
+            print(f"{s['id']} [{v}]{' LATE' if s.get('late') else ''}{' REVEALED ' + s['revealed'] if s.get('revealed') else ''}: "
                   f"{s['title']}")
             if args.full or args.for_ == "checker":
                 print(f"  given: {s['given']}\n  when:  {s['when']}\n  then:  {s['then']}"
@@ -3111,6 +3119,25 @@ def cmd_scenario(args):
         if not args.evidence:
             die("scenario grade: --evidence is mandatory (what was executed and what happened)", 2)
         reject_deferral_evidence(sid, verdict, args.evidence)
+        if verdict == "verified":
+            # Run 14: a checker graded a scenario `verified` by READING diffs, and the lead's own
+            # closing message said nothing had been tried in the running app. "verified" means it
+            # executed: it must name a check that passed through the runtime against the current
+            # code. Reading proves shape, not behaviour; the honest verdicts for that are
+            # manual_confirmation_required or blocked, and the task then closes CONDITIONAL.
+            if not args.check:
+                die("scenario grade: `verified` needs --check <id> (e.g. 0012-test): a check that "
+                    "EXECUTED this scenario and passed against the current code. If you only read "
+                    "the code, grade it manual_confirmation_required (say what a human must try) "
+                    "or blocked.", 2)
+            m = re.match(r"^0*(\d+)", args.check)
+            st0 = load_state(args.id)
+            rec = next((c for c in st0.get("checks", []) if m and c.get("seq") == int(m.group(1))), None)
+            cfg = load_config() if os.path.isfile(config_path()) else DEFAULT_CONFIG
+            if (not rec or rec.get("unavailable") or rec.get("exit") != 0 or not rec.get("stable")
+                    or rec.get("snapshot_after") != compute_snapshot(cfg)):
+                die(f"scenario grade: check '{args.check}' is not a passing check against the current "
+                    f"code (missing, failed, unstable, unavailable, or from before an edit)", 2)
         with task_lock(args.id):
             state = load_state(args.id)
             # Run 12: five scenarios were graded with one shared sentence ("covered by the
@@ -3689,6 +3716,8 @@ def build_parser():
     p_sg.add_argument("sid")
     p_sg.add_argument("--verdict", required=True)
     p_sg.add_argument("--evidence", default=None)
+    p_sg.add_argument("--check", default=None,
+                      help="id of the passing runtime check that executed this scenario (required for verified)")
     p_sg.set_defaults(func=cmd_scenario)
 
     p_fin = sub.add_parser("finish", help="verify --require, report, episode close; stops at the first refusal")

@@ -120,3 +120,19 @@ Findings -> fixes (v4.5.1):
    loads). Fix: front door: `git status --short` before the first edit; say it in one line; never stage,
    commit or revert the human's files.
 3. Empty report skeleton at toy stakes. Fix: at toy the closing message is the report.
+
+## Run 14 (v4.5.2, Claude Code) — T-039, bare prompt: "Fix the 16 react-hooks/set-state-in-effect lint errors in platform/."
+Lead chose **internal** unprompted, ran `git status` first, did the 12-file refactor itself (no units, no
+board), 17 responses, context 74k -> 99k. Work verified independently: no suppressions, one consistent React
+pattern (adjust state during render against a `prev*` value), lint 80 -> 64, rule at 0, tsc clean, vitest
+302/302 (run by the reviewer; nobody in the task ran it). Checks went through the runtime after the last edit
+(v4.5.1 rule held). `eaos-checker` spawned and counted. Final message honest: "it reviewed the code and did not
+run the pages in a browser".
+Findings -> fixes (v4.5.3):
+1. The checker graded the scenario `verified` **by reading diffs** (5 calls, 36 s) while the lead's own message
+   said nothing was tried in the running app: verdict and truth disagreed. Fix: `scenario grade --verdict
+   verified` requires `--check <id>` naming a passing runtime check against the current code; reading alone
+   grades `manual_confirmation_required`, and the task closes CONDITIONAL.
+2. The single scenario was written after the build. Fix: `scenario add` marks it LATE once the code differs
+   from the task's start snapshot (a regression check, not a holdout); front door says before the first edit.
+3. Nobody ran the test suite. Fix: front door and checker definition: run every kind of check the project has.

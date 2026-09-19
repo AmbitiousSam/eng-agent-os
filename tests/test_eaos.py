@@ -2677,6 +2677,12 @@ class TestScenarios(V4Case):
         self.assertEqual(rc, 0, err)
         return out.strip()
 
+    def passing_check(self):
+        rc, out, err = run(self.cwd, "check", self.tid, "--category", "test", "--cmd", "true")
+        self.assertEqual(rc, 0, out + err)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            return f"{json.load(f)['checks'][-1]['seq']:04d}-test"
+
     def test_content_lives_outside_the_workspace(self):
         sid = self.add()
         inside = subprocess.run(["grep", "-rl", "8 days ago", self.cwd], capture_output=True, text=True)
@@ -2699,7 +2705,8 @@ class TestScenarios(V4Case):
         self.assertEqual(rc, 1)
         self.assertIn(sid, out)
         rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
-                           "--evidence", "created a link with created_at -8d; GET /abc -> 410")
+                           "--evidence", "created a link with created_at -8d; GET /abc -> 410",
+                           "--check", self.passing_check())
         self.assertEqual(rc, 0, err)
         self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 0)
 
@@ -2715,13 +2722,47 @@ class TestScenarios(V4Case):
     def test_shared_evidence_across_scenarios_refused(self):
         a = self.add(); b = self.add(title="unknown link", req="unknown links 404")
         ev = "Covered by executed tests in route.test.ts; mutation-checked"
-        self.assertEqual(run(self.cwd, "scenario", "grade", self.tid, a, "--verdict", "verified", "--evidence", ev)[0], 0)
-        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, b, "--verdict", "verified", "--evidence", "  covered by executed tests in route.test.ts;  mutation-checked")
+        ck = self.passing_check()
+        self.assertEqual(run(self.cwd, "scenario", "grade", self.tid, a, "--verdict", "verified", "--evidence", ev, "--check", ck)[0], 0)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, b, "--verdict", "verified", "--check", ck, "--evidence", "  covered by executed tests in route.test.ts;  mutation-checked")
         self.assertEqual(rc, 2)
         self.assertIn("identical", err)
         rc, out, err = run(self.cwd, "scenario", "grade", self.tid, b, "--verdict", "verified",
-                           "--evidence", "route.test.ts 'unknown slug' -> 404; flipping the lookup made it fail")
+                           "--evidence", "route.test.ts 'unknown slug' -> 404; flipping the lookup made it fail", "--check", ck)
         self.assertEqual(rc, 0, err)
+
+    def test_verified_needs_an_executed_check_reading_is_not_enough(self):
+        sid = self.add()
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
+                           "--evidence", "Read the diff: the render-phase compare resets the page")
+        self.assertEqual(rc, 2)
+        self.assertIn("manual_confirmation_required", err)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
+                           "--evidence", "ran it", "--check", "0999-test")
+        self.assertEqual(rc, 2)
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "manual_confirmation_required",
+                           "--evidence", "read the diff only; a human must click through the users list filters")
+        self.assertEqual(rc, 0, err)
+        run(self.cwd, "verify", self.tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", "lint 0")
+        self.assertEqual(run(self.cwd, "verify", self.tid, "--require")[0], 3)      # CONDITIONAL, honestly
+
+    def test_a_check_from_before_an_edit_cannot_back_a_verified_scenario(self):
+        sid = self.add()
+        ck = self.passing_check()
+        with open(os.path.join(self.cwd, "late_edit.py"), "w") as f:
+            f.write("x = 1\n")
+        rc, out, err = run(self.cwd, "scenario", "grade", self.tid, sid, "--verdict", "verified",
+                           "--evidence", "ran it", "--check", ck)
+        self.assertEqual(rc, 2)
+
+    def test_scenario_written_after_the_code_changed_is_marked_late(self):
+        tid = run(self.cwd, "task", "new", "late scenarios", "--kind", "chore", "--stakes", "internal")[1].strip().splitlines()[-1]
+        with open(os.path.join(self.cwd, "already.py"), "w") as f:
+            f.write("x = 1\n")
+        rc, out, err = run(self.cwd, "scenario", "add", tid, "--title", "t", "--given", "g", "--when", "w", "--then", "th")
+        self.assertEqual(rc, 0)
+        self.assertIn("LATE", err)
+        self.assertIn("LATE", run(self.cwd, "scenario", "list", tid)[1])
 
     def test_failure_reveals_and_becomes_regression(self):
         sid = self.add()

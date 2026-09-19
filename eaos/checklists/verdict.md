@@ -32,6 +32,7 @@ sources: [agents/verifier.md, commands/agentic-os.md (Step 10), orchestrator/loo
 - A superseded criterion is dropped and graded under its successor. It is not a pass.
 
 ## Scenarios (holdouts the maker never saw)
+- `verified` on a scenario names the executed check that exercised it (`--check <id>`). Reading a diff proves shape, not behaviour: grade `manual_confirmation_required` and say what a human must try.
 - One grade per scenario with its OWN evidence: the test or command that exercised that scenario and the observed result. The runtime refuses evidence shared between scenarios.
 - Leaning on the maker's tests is allowed only after you broke the code and saw that test fail (mutation check); say which mutation.
 - `eaos scenario list <task> --for checker` lists end-to-end expectations written at intake
