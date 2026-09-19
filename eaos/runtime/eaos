@@ -585,7 +585,7 @@ def ensure_not_blocked(state, task_id):
     blocked = state.get("blocked") or {}
     reason = blocked.get("reason", "unknown")
     die(f"task is BLOCKED ({reason}) — resolve via human gate; use "
-        f"`eaos phase {task_id} <PHASE> --unblock --reason '<r>'` to resume", 1)
+        f"`eaos phase {task_id} --unblock --reason '<r>'` to resume", 1)
 
 @contextlib.contextmanager
 def project_lock():
@@ -1069,6 +1069,12 @@ def cmd_append(args):
 def cmd_phase(args):
     with task_lock(args.id):
         state = load_state(args.id)
+        # v4 has no phase pipeline, so unblocking must not demand a phase name: `eaos phase
+        # <task> --unblock --reason "..."` keeps whatever phase the task has (run 17).
+        if args.phase is None:
+            if not args.unblock:
+                die("phase: a phase name is required unless --unblock is given", 2)
+            args.phase = state.get("phase") or "INTAKE"
         fp = compute_request_fingerprint(
             "phase", args.id,
             [("phase", args.phase), ("unblock", args.unblock), ("reason", args.reason)],
@@ -1259,7 +1265,8 @@ def cmd_spawn(args):
         item = goal_item_in_progress(gstate)
         if item:
             with task_lock(args.id):
-                warroom_log(args.id, f"[{now_iso()}] SPAWN agent={args.agent} charged to item {item}")
+                warroom_log(args.id, f"[{now_iso()}] CHARGED agent={args.agent} to item {item} "
+                                      f"(counted on the item's own budget, not on this goal)")
             args.id = item
     with project_lock():
         with task_lock(args.id):
@@ -1278,6 +1285,9 @@ def cmd_spawn(args):
             if total + 1 > cap:
                 warroom_log(args.id, f"[{ts}] SPAWN REJECTED agent={args.agent} "
                                       f"tree_total={total}/{cap} root={root} (over budget)")
+                print("(the budget is not fixed: base + 2 per live unit + 3 per goal item + 2 at "
+                      "production stakes, ceiling 60 — `eaos status` shows it. Declaring the work as "
+                      "units raises it honestly; raising the base is the human's call.)")
                 print(f"BUDGET EXCEEDED: tree total would be {total + 1}/{cap} spawns "
                       f"(root {root}) — downgrade or drop an agent, or raise the cap "
                       f"consciously at init")
@@ -2006,7 +2016,8 @@ def cmd_audit(args):
     # spawns (this is exactly the eval-run leak: 16 real spawns, 10 recorded).
     n_state_spawns = state.get("spawns", {}).get("count", 0)
     warroom_spawn_lines = [ln for ln in warroom_text.splitlines()
-                            if re.search(r"\bSPAWN agent=", ln) and "REJECTED" not in ln]
+                            if re.search(r"\bSPAWN agent=", ln) and "REJECTED" not in ln
+                            and "charged to item" not in ln]
     n_warroom_spawns = len(warroom_spawn_lines)
     task_agent_mentions = len(re.findall(r"\b(?:Task|Agent)\(", warroom_text))
     a_ok = (n_state_spawns == n_warroom_spawns) and (task_agent_mentions <= n_state_spawns)
@@ -3570,7 +3581,7 @@ def build_parser():
 
     p_phase = sub.add_parser("phase")
     p_phase.add_argument("id")
-    p_phase.add_argument("phase")
+    p_phase.add_argument("phase", nargs="?", default=None)
     p_phase.add_argument("--unblock", action="store_true",
                          help="clear a BLOCKED status (from a hard_blocker loopback) and "
                               "record the unblock reason; requires --reason")

@@ -168,3 +168,6 @@ Goal level fired and worked through 4 of 5 items (parallel readers at intake, in
 
 ## 2026-09-19 — dynamic spawn budget (Siva's steer)
 Fixed cap replaced: budget = base + 2/live unit + 3/goal item + 2 at production, hard ceiling 60; configured number is the base. Replayed on real T-042: T-047 1/14, goal 12/27.
+
+## 2026-09-19 — v4.5.6
+v4.5.5's goal-side note was a SPAWN line; audit counted it; careful lead stopped and blocked T-047. Fixed note wording, audit tolerance for old line, budget explanation on refusal, unblock without phase name. Lesson: replay the AUDIT, not only the verb, against real state before release.

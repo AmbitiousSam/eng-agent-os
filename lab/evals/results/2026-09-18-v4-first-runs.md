@@ -203,3 +203,14 @@ only measured when a turn stops.
 Siva's steer on the fix: a fixed number will keep biting as work grows; make it dynamic. Done in the same release:
 the budget now follows the work (base + 2 per live unit + 3 per goal item + 2 at production, hard ceiling 60). The
 configured number became the base, so no existing project gets a stricter budget than it had.
+
+### Run 17, second half (v4.5.5) — my fix confused a careful lead
+The charged-to-item spawn passed, but v4.5.5 logged the goal-side note as a `SPAWN agent=...` line. The audit's
+spawns-vs-warroom check counted it: state 12, war-room 13. The lead read that as "the cap was bypassed without the
+human's decision", refused to smooth it over, did not touch `.eaos` counters, let the builder finish, recorded T-047 as
+BLOCKED on the human and asked for `init --max-spawns 16`. Every one of those choices was right given what it could
+see; the defect was mine. It also still believed the cap was 12, because nothing told it the budget had become dynamic.
+Fixes (v4.5.6): the goal-side note is `CHARGED ...`, not a spawn line; the audit ignores the v4.5.5 wording already
+in real war rooms; a refused spawn now prints the live budget and how it is computed; `phase --unblock` no longer
+demands a v3 phase name. Replayed on a copy of the real state: audit clean, unblock, item checker 2/14, acceptance
+checker 13/27, audit clean.

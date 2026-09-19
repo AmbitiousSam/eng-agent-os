@@ -2958,7 +2958,14 @@ class TestGoalLevel(GoalBase):
                 return json.load(f)["spawns"]["count"]
         self.assertEqual((count(self.gid), count(a), count(b)), (1, 3, 0))
         with open(os.path.join(self.cwd, ".eaos", self.gid, "warroom.md")) as f:
-            self.assertIn(f"charged to item {a}", f.read())
+            self.assertIn(f"to item {a}", f.read())
+        # v4.5.5 wrote the goal-side note as a SPAWN line; the audit then saw a 13th spawn on the
+        # goal and a careful lead stopped a real run. Neither the new note nor the old one counts.
+        with open(os.path.join(self.cwd, ".eaos", self.gid, "warroom.md"), "a") as f:
+            f.write("[2026-09-19T23:40:00] SPAWN agent=eaos-builder charged to item T-999\n")
+        rc, out, err = run(self.cwd, "audit", self.gid)
+        self.assertNotIn("spawns_vs_warroom: state", out.split("[DISCREPANCY]")[-1] if "[DISCREPANCY]" in out else "")
+        self.assertIn("[ok] spawns_vs_warroom", out)
 
     def test_goal_own_budget_scales_with_its_items(self):
         self.lock()

@@ -65,7 +65,7 @@ command fails, show the user its last ten lines and stop. To verify later:
 In your projects EAOS writes one folder, `.eaos/`, holding task state. Add it to `.gitignore` or
 commit it, your choice.
 
-Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.5.5` pins a release, `EAOS_SRC=<dir>` moves
+Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.5.6` pins a release, `EAOS_SRC=<dir>` moves
 the checkout. Working from a clone instead: `./setup.sh`, then optionally
 `./eaos/runtime/install-eaos-hooks.sh`.
 
@@ -182,7 +182,7 @@ You never run the runtime script. The agent does, the way it runs `git`.
 
 ## Status, honestly
 
-v4.5.5. Seventeen real runs on a private production codebase were reviewed and every defect they
+v4.5.6. Seventeen real runs on a private production codebase were reviewed and every defect they
 exposed was fixed (`lab/evals/results/2026-09-18-v4-first-runs.md`). In those runs the checker caught
 real bugs three times, no session compacted, and tasks used 1 to 4 subagents.
 
