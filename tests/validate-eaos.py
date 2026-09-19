@@ -94,6 +94,12 @@ if exists(cmd_rel):
 
 # ---------- 3. boundary agent definitions: exactly three, scoped tools, no personas ----------
 BOUNDARIES = {"eaos-builder": {"Write", "Edit"}, "eaos-reader": set(), "eaos-checker": set()}
+# front door token budget: the same estimate the doctor uses (chars / 4), so the gate catches
+# a front door that grew past its own bootstrap budget BEFORE a release, not after (v4.5.1).
+_fd = read(P(cmd_rel))
+_est = len(_fd) // 4
+(ok if _est <= 2000 else err)(f"front door ~{_est} tokens (bootstrap budget 2000)")
+
 agent_dir = P("agents")
 found = sorted(f[:-3] for f in os.listdir(agent_dir) if f.endswith(".md") and f != "README.md") \
     if os.path.isdir(agent_dir) else []

@@ -21,11 +21,9 @@ are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 
 
 ## Task or goal?
 
-If the ask fits one chat, it is a **task**: continue below. If it is bigger (a product, a feature
-set, a backlog, an investigation that will spawn work), it is a **goal**: load
-`checklists/goal.md` and follow it. A goal is an intent contract you lock with the human, work items
-that each name the requirement they serve, **one item per context**, and acceptance of the whole. If
-the argument is `next`, `status` or `accept`, it refers to the open goal: `$E goal next|status <goal>`.
+Fits one chat: a **task**, continue below. Bigger (a product, a feature set, a backlog, an
+investigation that will spawn work): a **goal**, load `checklists/goal.md` and follow it. If the
+argument is `next`, `status` or `accept`, it means the open goal: `$E goal next|status <goal>`.
 
 ## Start (one command, then work)
 
@@ -38,10 +36,10 @@ and **`$E finish <task>`** at the end (it runs require, report and close, and st
 refusal; exit 2 anywhere = read `--help`, fix, retry). Nothing to do after all?
 `$E episode close <task> --abandon --reason "..."`. **If you changed any file, one check must
 execute through the runtime after your last edit**, at every stakes level:
-`$E check <task> --category lint|test|type|build|other --cmd "<the project's command>"`. A sentence
-in `--evidence` is a claim; `finish` refuses without the executed check. **Before your first edit run
-`git status --short`**: if the tree already has uncommitted work that is not yours, tell the human in
-one line (and work on a new branch unless told otherwise); never stage, commit or revert their files.
+`$E check <task> --category lint|test|type|build|other --cmd "<project command>"`; `finish`
+refuses without it. **Before your first edit run `git status --short`**: uncommitted work that is
+not yours? Say so in one line, use a new branch unless told otherwise, never stage, commit or
+revert it.
 Stakes decide only how much sits between: toy = you do the work
 yourself, no units, no checker, and your closing message is the report (no report file); internal = plus an independent checker; production = plus
 `checklists/security.md` and an executed rehearsal for anything deploy-shaped. The checker
