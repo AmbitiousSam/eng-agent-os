@@ -216,7 +216,9 @@ demands a v3 phase name. Replayed on a copy of the real state: audit clean, unbl
 checker 13/27, audit clean.
 
 ### Run 17, completion (v4.5.7) — first real goal closed, conditional-manual
-After `eaos goal next` began printing the live budget, the lead cleared the stale block itself with a recorded
+It did NOT unstick itself. Both chats were stopped, waiting on the human, and stayed stopped until Siva typed
+"EAOS updated. Run eaos goal next T-042 again and follow what it prints." Only then, with `eaos goal next` printing the
+live budget, did the lead clear the stale block with a recorded
 reason ("live spawn budget goal 12/27, T-047 1/14 has room for checker"), ran T-047's checker (spawn charged to the
 item, 2/14), then the acceptance checker on the goal.
 **The acceptance check found two integration defects that every item-level checker had passed:**
@@ -231,3 +233,7 @@ Audits clean on the goal and every item. Independently confirmed: lint 0 errors,
 (65 files). 74 files changed, 38 new follow-through files, nothing committed or pushed.
 This is the first evidence for the goal level's reason to exist: all items verified, and the whole still wrong,
 caught by a clean-context check of the acceptance lines.
+
+Cost to the human of this one runtime fix: three stalls, each needing a message from him, in a run that would
+otherwise have needed exactly one ("lock it"). A stopped chat cannot wake itself; the only real remedy is not
+shipping a change that stops it.
