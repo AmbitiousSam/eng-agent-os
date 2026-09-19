@@ -6,9 +6,9 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EAOS="$REPO_ROOT/runtime/eaos"
-HOOK="$REPO_ROOT/runtime/eaos-hook.sh"
-INSTALL="$REPO_ROOT/runtime/install-eaos-hooks.sh"
+EAOS="$REPO_ROOT/eaos/runtime/eaos"
+HOOK="$REPO_ROOT/eaos/runtime/eaos-hook.sh"
+INSTALL="$REPO_ROOT/eaos/runtime/install-eaos-hooks.sh"
 
 pass_count=0
 fail_count=0

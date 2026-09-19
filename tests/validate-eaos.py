@@ -19,6 +19,16 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PRODUCT = ("agents", "checklists", "templates", "adapters", "runtime")
+
+def P(rel):
+    """Repo path for a product-relative name: the product lives under eaos/, and the front
+    door (installed as commands/agentic-os.md) is eaos/agentic-os.md in the repo."""
+    if rel == "commands/agentic-os.md":
+        return os.path.join(ROOT, "eaos", "agentic-os.md")
+    if rel.split("/")[0] in PRODUCT:
+        return os.path.join(ROOT, "eaos", rel)
+    return os.path.join(ROOT, rel)
 
 # ---------- minimal YAML loader (prefer PyYAML, fall back for frontmatter) ----------
 try:
@@ -59,7 +69,7 @@ def frontmatter(text):
     return fm
 
 def exists(rel):
-    return os.path.exists(os.path.join(ROOT, rel))
+    return os.path.exists(P(rel))
 
 # ---------- 1. core files / dirs present ----------
 REQUIRED = ["commands/agentic-os.md", "runtime/routing.yaml", "setup.sh", "README.md",
@@ -68,12 +78,12 @@ REQUIRED = ["commands/agentic-os.md", "runtime/routing.yaml", "setup.sh", "READM
 for r in REQUIRED:
     (ok if exists(r) else err)(f"required file: {r}")
 for d in ["agents", "checklists", "templates", "adapters"]:
-    (ok if os.path.isdir(os.path.join(ROOT, d)) else err)(f"required dir: {d}/")
+    (ok if os.path.isdir(P(d)) else err)(f"required dir: {d}/")
 
 # ---------- 2. front door: bootstrap budget, no model pin, follow-up rule ----------
 cmd_rel = "commands/agentic-os.md"
 if exists(cmd_rel):
-    text = read(os.path.join(ROOT, cmd_rel))
+    text = read(P(cmd_rel))
     est = len(text) // 4
     (ok if est <= 2000 else err)(f"{cmd_rel}: bootstrap ~{est} tokens (budget 2000, v4 C-1)")
     fm = frontmatter(text) or {}
@@ -84,7 +94,7 @@ if exists(cmd_rel):
 
 # ---------- 3. boundary agent definitions: exactly three, scoped tools, no personas ----------
 BOUNDARIES = {"eaos-builder": {"Write", "Edit"}, "eaos-reader": set(), "eaos-checker": set()}
-agent_dir = os.path.join(ROOT, "agents")
+agent_dir = P("agents")
 found = sorted(f[:-3] for f in os.listdir(agent_dir) if f.endswith(".md") and f != "README.md") \
     if os.path.isdir(agent_dir) else []
 extra = [a for a in found if a not in BOUNDARIES]
@@ -117,15 +127,15 @@ for c in CHECKLISTS:
     if not exists(rel):
         err(f"{rel}: missing (named by the front door)")
         continue
-    fm = frontmatter(read(os.path.join(ROOT, rel))) or {}
+    fm = frontmatter(read(P(rel))) or {}
     for field in ["name", "description", "sources"]:
         (ok if field in fm else err)(f"{rel}: frontmatter has '{field}'")
-    lines = read(os.path.join(ROOT, rel)).count("\n")
+    lines = read(P(rel)).count("\n")
     (ok if lines <= 90 else warn)(f"{rel}: {lines} lines (on-demand checklists stay short)")
 
 # ---------- 5. routing.yaml parses + v4 shape ----------
 routing = None
-rp = os.path.join(ROOT, "runtime/routing.yaml")
+rp = P("runtime/routing.yaml")
 if exists("runtime/routing.yaml"):
     if not HAVE_YAML:
         warn("PyYAML not installed — routing.yaml structural checks skipped (run: pip install pyyaml)")
@@ -153,7 +163,7 @@ if exists("runtime/routing.yaml"):
 refs = set()
 for rel in [cmd_rel] + [f"checklists/{c}.md" for c in CHECKLISTS] + [f"agents/{a}.md" for a in found]:
     if exists(rel):
-        refs |= set(re.findall(r"templates/([\w-]+\.md)", read(os.path.join(ROOT, rel))))
+        refs |= set(re.findall(r"templates/([\w-]+\.md)", read(P(rel))))
 for t in sorted(refs):
     (ok if exists(f"templates/{t}") else err)(f"referenced template exists: templates/{t}")
 
@@ -163,14 +173,14 @@ DELETED = ["playbooks/", "orchestrator/loop.md", "orchestrator/orchestrator.md",
 for rel in [cmd_rel] + [f"agents/{a}.md" for a in found] + [f"checklists/{c}.md" for c in CHECKLISTS]:
     if not exists(rel):
         continue
-    body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", read(os.path.join(ROOT, rel)), count=1, flags=re.S)
+    body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", read(P(rel)), count=1, flags=re.S)
     hits = [d for d in DELETED if d in body]   # frontmatter `sources` may name deleted files
     (ok if not hits else err)(f"{rel}: no reference to removed v3 machinery" + (f" ({hits})" if hits else ""))
 
 # ---------- 8. setup.sh installs the front door, the three agents and the checklists ----------
 if exists("setup.sh"):
-    st = read(os.path.join(ROOT, "setup.sh"))
-    for needle, label in [("commands/agentic-os.md", "front door"), ("checklists", "checklists"),
+    st = read(P("setup.sh"))
+    for needle, label in [("eaos/agentic-os.md", "front door"), ("checklists", "checklists"),
                           ("agency-", "legacy agency-agents cleanup"), ("eaos-hook.sh", "hook script")]:
         (ok if needle in st else err)(f"setup.sh handles {label}")
     (ok if "AGENCY_REPO" not in st else err)("setup.sh no longer clones agency-agents")
@@ -182,7 +192,7 @@ if exists(mech_rel):
     if HAVE_YAML:
         import yaml as _y
         try:
-            mdoc = _y.safe_load(read(os.path.join(ROOT, mech_rel))) or {}
+            mdoc = _y.safe_load(read(P(mech_rel))) or {}
             entries = mdoc.get("mechanisms") or []
             # Full frozen schema (spec section 12): every field present AND typed.
             # guardrails may be an EMPTY list (instrumentation mechanisms) but must exist;

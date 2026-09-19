@@ -138,3 +138,6 @@ User: repo looks a mess; no separate CLI wanted. Clarified the script is the age
 
 ## 2026-09-18 (late night) — product finish
 User: not yet a product; wants one-step install, AI-followable instructions, global use without copying AGENTS.md. Built install.sh (curl|bash -> ~/.eaos-src, setup, hooks if claude present, doctor); setup.sh generates ~/.agents/skills/agentic-os/SKILL.md from the one front door (Cursor+Codex load that dir; verified in Cursor docs + Codex docs); --uninstall; README rewritten. Verified real curl one-liner in isolated homes -> Healthy. Open: no LICENSE file (user decision); Cursor/Codex path never exercised on a real task.
+
+## 2026-09-19 — three folders
+User: still too many files/folders. Collapsed product into eaos/ (front door, agents, checklists, runtime, adapters, templates); tests/run.sh replaces Makefile; .github CI deleted (user: outdated); local junk removed (vendor/ 6.9MB, prompts/, caches). Top level: README, install.sh, setup.sh, eaos/, tests/, lab/. Mistake caught: a blanket path rewrite touched installed-relative paths (legacy manifest, checklist cross-refs); reverted, patched variable-anchored repo paths only.

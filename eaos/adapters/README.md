@@ -2,7 +2,7 @@
 
 EAOS v4 is markdown plus one runtime script the agent runs, so any host that can run a command can use it. A
 new chat reproduces a context boundary; it does not reproduce permissions or enforcement.
-`runtime/routing.yaml > adapters` records, per host, what each capability actually
+`routing.yaml > adapters` records, per host, what each capability actually
 is: **enforced** (a runtime or hook refuses the wrong action), **measured** (recorded, not
 prevented), **advisory** (a documented rule), **manual** (the human does it), **planned**.
 

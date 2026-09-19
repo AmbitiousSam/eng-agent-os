@@ -4,7 +4,7 @@
 set -uo pipefail
 
 CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
-EAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fail=0
 pass() { printf "  \033[0;32m✓\033[0m %s\n" "$*"; }
 bad()  { printf "  \033[0;31m✗\033[0m %s\n" "$*"; fail=1; }
@@ -24,8 +24,8 @@ if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help >/dev/null 2>&1; then pass "eaos C
 if python3 "$CLAUDE_DIR/eaos/bin/eaos" --help 2>/dev/null | grep -q "board"; then pass "eaos CLI is v4 (board/unit/check verbs)"; else bad "eaos CLI predates v4 — run ./setup.sh"; fi
 
 # checklists derived from the repo so this list never drifts
-need_cl="$(cd "$EAOS_DIR/checklists" 2>/dev/null && ls *.md 2>/dev/null | sed 's/\.md$//')"
-if [ -z "$need_cl" ]; then bad "could not derive the checklist list from $EAOS_DIR/checklists — run the doctor from a full checkout"; else
+need_cl="$(cd "$EAOS_DIR/eaos/checklists" 2>/dev/null && ls *.md 2>/dev/null | sed 's/\.md$//')"
+if [ -z "$need_cl" ]; then bad "could not derive the checklist list from $EAOS_DIR/eaos/checklists — run the doctor from a full checkout"; else
   miss=""; n=0
   for c in $need_cl; do n=$((n + 1)); [ -e "$CLAUDE_DIR/eaos/checklists/$c.md" ] || miss="$miss $c"; done
   [ -z "$miss" ] && pass "all $n checklists installed" || bad "missing checklists:$miss — run ./setup.sh"
@@ -39,7 +39,7 @@ if [ -e "$CLAUDE_DIR/commands/agentic-os.md" ]; then
 fi
 
 # models.mode=inherit: installed boundary agents must not pin a model
-mm="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/runtime/routing.yaml" 2>/dev/null)"
+mm="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/eaos/runtime/routing.yaml" 2>/dev/null)"
 if [ "${mm:-inherit}" = "inherit" ]; then
   pinned=""
   for a in eaos-builder eaos-reader eaos-checker; do grep -q "^model:" "$CLAUDE_DIR/agents/$a.md" 2>/dev/null && pinned="$pinned $a"; done

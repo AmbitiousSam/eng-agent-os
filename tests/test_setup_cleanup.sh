@@ -63,7 +63,7 @@ SK="$AGENTS_SKILLS_HOME/agentic-os/SKILL.md"
 if [ -f "$SK" ]; then ok "global skill installed"; else bad "global skill missing"; fi
 assert_eq "skill frontmatter names the skill" "name: agentic-os" "$(sed -n 2p "$SK")"
 if grep -q '\$ARGUMENTS' "$SK"; then bad "skill still carries \$ARGUMENTS"; else ok "skill has no unresolved \$ARGUMENTS"; fi
-body_cmd="$(awk 'NR==1&&/^---/{f=1;next} f&&/^---/{f=0;next} !f' "$REPO/commands/agentic-os.md" | grep -c 'Work in units')"
+body_cmd="$(awk 'NR==1&&/^---/{f=1;next} f&&/^---/{f=0;next} !f' "$REPO/eaos/agentic-os.md" | grep -c 'Work in units')"
 assert_eq "skill carries the front door body" "$body_cmd" "$(grep -c 'Work in units' "$SK")"
 
 # --uninstall leaves nothing of ours behind (quarantine from the cleanup above is the user's)

@@ -18,8 +18,8 @@ bash "$SRC/setup.sh"
 # Hooks only matter in Claude Code. Wire them when Claude Code is on this machine; the hook
 # installer backs settings.json up first and `./setup.sh --uninstall` removes them again.
 if [ -z "${EAOS_NO_HOOKS:-}" ] && [ -d "${CLAUDE_HOME:-$HOME/.claude}" ] && command -v claude >/dev/null 2>&1; then
-  say "Claude Code found: wiring hooks (skip with EAOS_NO_HOOKS=1)"; bash "$SRC/runtime/install-eaos-hooks.sh" >/dev/null
+  say "Claude Code found: wiring hooks (skip with EAOS_NO_HOOKS=1)"; bash "$SRC/eaos/runtime/install-eaos-hooks.sh" >/dev/null
 fi
-bash "$SRC/runtime/eaos-doctor.sh" | tail -3
+bash "$SRC/eaos/runtime/eaos-doctor.sh" | tail -3
 say "Done. Open any repository and type:  /agentic-os <your task>   (Codex: \$agentic-os <your task>)"
 say "Update: re-run this command.   Uninstall: bash $SRC/setup.sh --uninstall"

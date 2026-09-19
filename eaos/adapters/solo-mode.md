@@ -34,6 +34,6 @@ context is obtained differs (a new chat instead of a subagent).
 ## What this does not give you
 
 Read-only enforcement for the checker, hidden evaluator scenarios, or a writer lease the
-host actually gates. Those are advisory here (`runtime/routing.yaml > adapters`).
+host actually gates. Those are advisory here (`routing.yaml > adapters`).
 What it does give you is the part the evidence says matters most: a clean context for the
 check, and evidence the runtime will not accept from the wrong snapshot.

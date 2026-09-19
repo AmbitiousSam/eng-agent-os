@@ -15,7 +15,7 @@ is loaded once; follow-up messages are plain conversation. **Do not re-run this 
 a live context.** In a fresh context on an existing task, run `eaos status --packet <task>`
 first (it also binds this session to the task, so spawns are counted).
 
-`E=~/.claude/eaos/bin/eaos` (or `runtime/eaos` in an eng-agent-os checkout). Its exit codes
+`E=~/.claude/eaos/bin/eaos` (or `eaos/runtime/eaos` in an eng-agent-os checkout). Its exit codes
 are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 3 conditional ·
 4 lock busy, retry. No CLI installed → tell the human to run `setup.sh` and stop.
 

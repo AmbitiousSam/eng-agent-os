@@ -33,7 +33,7 @@ install_file() {
 #    what moved where), never deleted. `setup.sh --dry-run` prints the plan and changes
 #    nothing. Project-local .eaos/ directories are never touched.
 # ---------------------------------------------------------------------------------------
-MANIFEST="$EAOS_DIR/runtime/legacy-manifest.sha256"
+MANIFEST="$EAOS_DIR/eaos/runtime/legacy-manifest.sha256"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 SKILL_DIR="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os"
@@ -41,7 +41,7 @@ SKILL_DIR="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os"
 # ./setup.sh --uninstall : remove everything this installer put on the machine. Project-local
 # .eaos/ directories, scenario stores and the quarantine folder are yours and are left alone.
 if [ "${1:-}" = "--uninstall" ]; then
-  bash "$EAOS_DIR/runtime/install-eaos-hooks.sh" --uninstall >/dev/null 2>&1 || true
+  bash "$EAOS_DIR/eaos/runtime/install-eaos-hooks.sh" --uninstall >/dev/null 2>&1 || true
   rm -f "$COMMANDS_DIR/agentic-os.md" "$AGENTS_DIR"/eaos-builder.md "$AGENTS_DIR"/eaos-reader.md "$AGENTS_DIR"/eaos-checker.md
   rm -rf "$CONFIG_DIR/bin" "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/routing.yaml" "$SKILL_DIR"
   say "Uninstalled. Kept: project .eaos/ folders, $CONFIG_DIR/scenarios, $CONFIG_DIR/quarantine."
@@ -115,15 +115,15 @@ fi
 mkdir -p "$AGENTS_DIR" "$COMMANDS_DIR" "$CONFIG_DIR/templates" "$CONFIG_DIR/checklists" \
          "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin"
 say "Installing /agentic-os -> $COMMANDS_DIR"
-install_file "$EAOS_DIR/commands/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
+install_file "$EAOS_DIR/eaos/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
 
 # Boundary agent definitions. Under models.mode: inherit any `model:` frontmatter line is
 # stripped so a spawn always runs on the session's model.
-MODELS_MODE="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/runtime/routing.yaml")"
+MODELS_MODE="$(awk '/^models:/{f=1} f && /^  mode:/{print $2; exit}' "$EAOS_DIR/eaos/runtime/routing.yaml")"
 MODELS_MODE="${MODELS_MODE:-inherit}"
 say "Installing boundary agents -> $AGENTS_DIR (models.mode=$MODELS_MODE)"
 STRIP_TMP="$(mktemp -d)"
-for f in "$EAOS_DIR"/agents/eaos-*.md; do
+for f in "$EAOS_DIR"/eaos/agents/eaos-*.md; do
   [ -e "$f" ] || continue
   base="$(basename "$f")"
   if [ "$MODELS_MODE" = "inherit" ]; then
@@ -137,13 +137,13 @@ done
 rm -rf "$STRIP_TMP"
 
 say "Installing config, checklists, templates, adapters -> $CONFIG_DIR"
-install_file "$EAOS_DIR/runtime/routing.yaml" "$CONFIG_DIR/routing.yaml"
-for f in "$EAOS_DIR"/checklists/*.md; do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/checklists/$(basename "$f")"; done
-for f in "$EAOS_DIR"/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
-install_file "$EAOS_DIR/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
-install_file "$EAOS_DIR/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
+install_file "$EAOS_DIR/eaos/runtime/routing.yaml" "$CONFIG_DIR/routing.yaml"
+for f in "$EAOS_DIR"/eaos/checklists/*.md; do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/checklists/$(basename "$f")"; done
+for f in "$EAOS_DIR"/eaos/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
+install_file "$EAOS_DIR/eaos/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
+install_file "$EAOS_DIR/eaos/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
 # stale checklists/templates from a previous v4 install that no longer exist upstream
-for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/checklists/$(basename "$f")" ] && rm -f "$f"; done
+for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/eaos/checklists/$(basename "$f")" ] && rm -f "$f"; done
 
 # Global skill for Cursor and Codex (both load ~/.agents/skills; Cursor also shows it as
 # /agentic-os). GENERATED from the one front door so there is never a second copy to drift:
@@ -152,15 +152,15 @@ say "Installing global skill for Cursor / Codex -> $SKILL_DIR"
 mkdir -p "$SKILL_DIR"
 SKILL_TMP="$(mktemp)"
 {
-  cat "$EAOS_DIR/adapters/skill-head.md"
-  awk 'NR==1 && /^---/ {fm=1; next} fm && /^---/ {fm=0; next} !fm {print}' "$EAOS_DIR/commands/agentic-os.md" \
+  cat "$EAOS_DIR/eaos/adapters/skill-head.md"
+  awk 'NR==1 && /^---/ {fm=1; next} fm && /^---/ {fm=0; next} !fm {print}' "$EAOS_DIR/eaos/agentic-os.md" \
     | sed 's/\*\*\$ARGUMENTS\*\*/**the task the user gave when invoking this skill**/'
 } > "$SKILL_TMP"
 install_file "$SKILL_TMP" "$SKILL_DIR/SKILL.md"; rm -f "$SKILL_TMP"
 
 say "Installing eaos runtime CLI + hook accelerator -> $CONFIG_DIR/bin"
-install_file "$EAOS_DIR/runtime/eaos" "$CONFIG_DIR/bin/eaos"
-install_file "$EAOS_DIR/runtime/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
+install_file "$EAOS_DIR/eaos/runtime/eaos" "$CONFIG_DIR/bin/eaos"
+install_file "$EAOS_DIR/eaos/runtime/eaos-hook.sh" "$CONFIG_DIR/bin/eaos-hook.sh"
 chmod +x "$CONFIG_DIR/bin/eaos" "$CONFIG_DIR/bin/eaos-hook.sh"
 
 # ---------------------------------------------------------------------------------------
@@ -173,7 +173,7 @@ chk() { if [ -e "$1" ]; then okc=$((okc + 1)); else printf "  \033[0;31m✗ MISS
 chk "$COMMANDS_DIR/agentic-os.md"
 for a in eaos-builder eaos-reader eaos-checker; do chk "$AGENTS_DIR/$a.md"; done
 chk "$CONFIG_DIR/routing.yaml"; chk "$CONFIG_DIR/bin/eaos"; chk "$CONFIG_DIR/bin/eaos-hook.sh"; chk "$SKILL_DIR/SKILL.md"
-for c in "$EAOS_DIR"/checklists/*.md; do chk "$CONFIG_DIR/checklists/$(basename "$c")"; done
+for c in "$EAOS_DIR"/eaos/checklists/*.md; do chk "$CONFIG_DIR/checklists/$(basename "$c")"; done
 leftover="$(find "$AGENTS_DIR" -maxdepth 1 -name 'agency-*.md' 2>/dev/null | wc -l | tr -d ' ')"
 printf "  \033[0;32m✓\033[0m %s files present; legacy agency-agents remaining: %s\n" "$okc" "$leftover"
 [ "$bad" -eq 0 ] || { say "Install incomplete."; exit 1; }

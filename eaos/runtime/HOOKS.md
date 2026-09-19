@@ -1,7 +1,7 @@
 # Hook accelerators (M-007, mechanisms.yaml)
 
 **What they do:** three Claude Code hooks — `PreToolUse` (matcher `Task|Agent`),
-`PostToolUse` (matcher `Bash`) and `Stop` — all invoke `runtime/eaos-hook.sh`, which
+`PostToolUse` (matcher `Bash`) and `Stop` — all invoke `eaos/runtime/eaos-hook.sh`, which
 shells out to the real `eaos` CLI so `eaos spawn` and `eaos audit` happen without the
 model choosing to run them, so the session is bound to its task the moment
 `eaos task new` runs, and (v4, advisory) so the lead's context size is recorded from the

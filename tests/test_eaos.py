@@ -14,7 +14,7 @@ import tempfile
 import threading
 import unittest
 
-EAOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runtime", "eaos")
+EAOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eaos", "runtime", "eaos")
 
 
 def run(cwd, *cli_args):
@@ -1984,9 +1984,9 @@ class TestSingleVerdictAuthority(EaosTestCase):
 
     def test_command_does_not_pin_a_model_under_inherit(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "commands", "agentic-os.md")) as f:
+        with open(os.path.join(root, "eaos", "agentic-os.md")) as f:
             head = f.read().split("---")[1]
-        with open(os.path.join(root, "runtime", "routing.yaml")) as f:
+        with open(os.path.join(root, "eaos", "runtime", "routing.yaml")) as f:
             routing = f.read()
         if "\n  mode: inherit" in routing:
             self.assertNotIn("\nmodel:", head,

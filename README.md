@@ -37,7 +37,7 @@ Follow-up messages are plain conversation. Do not re-type the command in the sam
 Run exactly the one command above in a terminal. Success is the line `Healthy.` near the end of its
 output. Do not clone manually, edit settings files or copy anything into the user's project. If the
 command fails, show the user its last ten lines and stop. To verify later:
-`bash ~/.eaos-src/runtime/eaos-doctor.sh`.
+`bash ~/.eaos-src/eaos/runtime/eaos-doctor.sh`.
 
 ### What the installer puts where
 
@@ -57,7 +57,7 @@ it is byte-identical to what EAOS shipped; anything you customised is moved to
 
 Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.2.0` pins a release, `EAOS_SRC=<dir>` moves
 the checkout. **Uninstall:** `bash ~/.eaos-src/setup.sh --uninstall`. Working from a clone instead:
-`./setup.sh`, then optionally `./runtime/install-eaos-hooks.sh`.
+`./setup.sh`, then optionally `./eaos/runtime/install-eaos-hooks.sh`.
 
 ## What a task looks like
 
@@ -90,7 +90,7 @@ You never run the runtime script. The agent does, the way it runs `git`.
 | Parallel read-only researchers | subagents | not available |
 | Spawn budget, session binding, stop-time audit, context size | hooks | not available |
 
-`adapters/README.md` has the full table. `adapters/AGENTS.md` is a drop-in for hosts that read
+`eaos/adapters/README.md` has the full table. `eaos/adapters/AGENTS.md` is a drop-in for hosts that read
 `AGENTS.md` but do not load skills.
 
 ## Status, honestly
@@ -106,18 +106,18 @@ on macOS. Read `lab/EVAL-PROTOCOL.md` before believing any claim here, including
 
 ## Repository map
 
-The product is the first six rows, about twenty files.
+Three folders. The product is `eaos/`, about thirty files, and it is all the installer copies.
 
 | Path | What |
 |---|---|
-| `commands/agentic-os.md` | the front door, about 100 lines, loaded once per context |
-| `agents/` | builder, reader, checker: tool-scoped boundaries, no personas |
-| `checklists/` | eleven, loaded on demand: intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
-| `runtime/` | `eaos` (the script), the Claude Code hook and its installer, doctor, `routing.yaml` |
-| `adapters/` | skill header for Cursor and Codex, `AGENTS.md` fallback, solo-mode procedure, capability table |
-| `templates/` | final report, ADR, task spec, test plan and the other documents the checklists name |
 | `install.sh`, `setup.sh` | one-step installer; the installer proper (`--dry-run`, `--uninstall`) |
-| `tests/` | runtime tests, hook tests, installer tests, repo validator (`make test`) |
+| `eaos/agentic-os.md` | the front door, about 100 lines, loaded once per context |
+| `eaos/agents/` | builder, reader, checker: tool-scoped boundaries, no personas |
+| `eaos/checklists/` | eleven, loaded on demand: intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
+| `eaos/runtime/` | `eaos` (the script the agent runs), the Claude Code hook and its installer, doctor, `routing.yaml` |
+| `eaos/adapters/` | skill header for Cursor and Codex, `AGENTS.md` fallback, solo-mode procedure, capability table |
+| `eaos/templates/` | final report, ADR, task spec, test plan and the other documents the checklists name |
+| `tests/` | `run.sh` runs everything: runtime tests, hook tests, installer tests, repo validator |
 | `lab/` | not product: specs, research, review records, experiment protocol, measured results |
 
 v3 (personas and playbooks) is preserved on branch `v3`, release v3.0.0.
