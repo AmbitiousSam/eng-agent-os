@@ -8,6 +8,7 @@ the exit-code contract in lab/reviews/2026-07-13-eaos-cli-spec.md.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -3081,6 +3082,63 @@ class TestSpawnBudgetFollowsTheWork(V4Case):
     def test_status_shows_the_live_budget(self):
         run(self.cwd, "unit", "start", self.tid, "--title", "u", "--kind", "read")
         self.assertIn("budget follows", run(self.cwd, "status", self.tid)[1])
+
+
+class TestWhatTheLeadSeesAgrees(GoalBase):
+    """Run 17 stalled three times because views a lead reads disagreed after a runtime change:
+    the audit counted a log note as a spawn, and nothing printed the live budget. A careful lead
+    stops on any inconsistency, and a stopped chat needs the human. So every view a lead can
+    read must tell ONE story, through a whole goal: spawn output, status, the packet, goal next,
+    and the audit."""
+
+    def budget_in(self, text):
+        m = re.search(r"(\d+)/(\d+)", text)
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    def views_agree(self, tid):
+        status = next(l for l in run(self.cwd, "status", tid)[1].splitlines() if l.startswith("Spawns:"))
+        packet = next(l for l in run(self.cwd, "status", "--packet", tid)[1].splitlines() if l.startswith("spawn budget:"))
+        with open(os.path.join(self.cwd, ".eaos", tid, "state.json")) as f:
+            count = json.load(f)["spawns"]["count"]
+        self.assertEqual(self.budget_in(status), self.budget_in(packet), (status, packet))
+        self.assertEqual(self.budget_in(status)[0], count)
+        rc, out, err = run(self.cwd, "audit", tid)
+        self.assertIn("clean", out.splitlines()[-1], out)
+        return self.budget_in(status)
+
+    def test_one_story_through_a_whole_goal(self):
+        self.lock()
+        a = self.item("expiry", "R-1")
+        b = self.item("404s", "R-2", after=a)
+        for n in range(3):                                           # intake readers: on the goal
+            self.assertEqual(run(self.cwd, "spawn", self.gid, "--agent", f"eaos-reader-{n}")[0], 0)
+        self.views_agree(self.gid)
+        run(self.cwd, "unit", "start", a, "--title", "build", "--kind", "build")
+        for agent in ("eaos-builder", "eaos-checker"):               # charged to the item in progress
+            rc, out, err = run(self.cwd, "spawn", self.gid, "--agent", agent)
+            self.assertEqual(rc, 0, out + err)
+            self.assertEqual(self.budget_in(out), self.views_agree(a))   # spawn output == status == packet
+        self.assertEqual(self.views_agree(self.gid)[0], 3)           # the goal's own count did not move
+        nxt = run(self.cwd, "goal", "next", self.gid)[1]
+        g_used, g_cap = self.views_agree(self.gid)
+        a_used, a_cap = self.views_agree(a)
+        self.assertIn(f"goal {g_used}/{g_cap}", nxt)                 # goal next tells the same numbers
+        self.assertIn(f"{a} {a_used}/{a_cap}", nxt)
+
+    def test_a_blocked_item_is_shown_as_blocked_with_the_way_out(self):
+        self.lock()
+        a = self.item("expiry", "R-1"); self.item("404s", "R-2")
+        rc, out, err = run(self.cwd, "loopback", a, "--edge", "BUILD->VERIFY", "--class", "hard_blocker", "--attempt", "1", "--issue", "no spawn slot: cap 12/12")
+        self.assertEqual(rc, 1, out + err)                # a hard blocker refuses by design
+        self.assertIn("BLOCKED", out)
+        rc, out, err = run(self.cwd, "goal", "next", self.gid)
+        self.assertEqual(rc, 3)
+        self.assertIn("NEXT IS BLOCKED", out)
+        self.assertIn("--unblock", out)
+        self.assertIn("BLOCKED", run(self.cwd, "status", "--packet", a)[1])
+        self.assertEqual(run(self.cwd, "phase", a, "--unblock", "--reason", "budget has room")[0], 0)   # no phase name needed
+        self.assertIn(f"NEXT: {a}", run(self.cwd, "goal", "next", self.gid)[1])
+        self.views_agree(a)
 
 
 if __name__ == "__main__":

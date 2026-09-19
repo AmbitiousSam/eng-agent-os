@@ -2137,8 +2137,12 @@ def cmd_audit(args):
     has_hard_blocker_entry = any(e.get("class") == "hard_blocker" for e in ledger_all)
     status = state.get("status")
     i_bad = []
-    if has_hard_blocker_entry and status == "active":
-        i_bad.append("hard_blocker ledger entry present while status=active")
+    # An unblock recorded with a reason (`phase --unblock --reason`) is the legitimate way back to
+    # active. Found by the one-story gate test: without this the audit flagged every properly
+    # unblocked task, and a careful lead stops on any discrepancy.
+    hard_n = sum(1 for e in ledger_all if e.get("class") == "hard_blocker")
+    if has_hard_blocker_entry and status == "active" and len(state.get("unblocks", [])) < hard_n:
+        i_bad.append("hard_blocker ledger entry present while status=active, with no recorded unblock")
     if status == "blocked" and not state.get("blocked"):
         i_bad.append("status=blocked with no blocked record")
     add("hard_blocker_state_consistency", not i_bad,

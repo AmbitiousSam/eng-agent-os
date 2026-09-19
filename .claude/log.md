@@ -177,3 +177,6 @@ Two fresh chats both stalled on T-047: read raw config 12 + stale block note; us
 
 ## 2026-09-20 — first real goal CLOSED (conditional-manual)
 Acceptance checker found 2 integration bugs all item checkers passed (PREP never in digest; archived apps still counted). Lead added fix item T-048, finished. 11/13 acceptance verified, 2 manual. Independently: lint 0, tsc 0, vitest 463. Strongest evidence yet for the goal level.
+
+## 2026-09-20 — v4.5.8: the lesson became a gate
+Siva: will this happen again? Turned the memory rule into tests: TestWhatTheLeadSeesAgrees (spawn output == status == packet == goal next, audit clean, through a whole goal; blocked item shown with way out). It immediately found a 4th defect: audit flagged every properly unblocked task. Fixed.
