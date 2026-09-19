@@ -137,3 +137,16 @@ New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditiona
   `verify --require`, `report`, `episode close` and `finish` agree.
 - Hook mode `guard` (PreToolUse): scenario store unreachable by tools; Edit/Write refused while a
   different active task holds the workspace pen.
+
+## v4.4.0 additions (2026-09-19)
+
+- `checker run <task|goal> [--host auto|claude|cursor|codex] [--timeout-min 30]`: starts the independent
+  checker as a separate headless process, counts it as a spawn, waits, then prints APPROVE / CONDITIONAL /
+  REJECT **computed by `require_status` from the verdicts that process recorded**. A process that records
+  nothing is a failed run (exit 1), never a pass. Exit 0 / 3 / 1.
+- `drain <goal> --max-items 3 --max-minutes 90 [--host] [--permission-mode] [--allowed-tools]`: one headless
+  process per ready item, dependency order. Stops: item budget, time budget, all closed (0); item did not
+  finish with a pass, or an item closed without a pass, or nothing ready (3). Refuses an unlocked intent or a
+  plan that does not cover it (1). Never locks intent, never grades acceptance.
+- `$EAOS_HOST_CMD` replaces the host command (`<cmd...> <role> <prompt>`); used by the tests' fake host.
+- claude invocation puts the prompt before `--allowedTools` (variadic; found by the first real run).

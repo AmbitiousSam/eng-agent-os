@@ -58,5 +58,5 @@ adapters:
     check_evidence_bound_to_snapshot: enforced   # eaos check + unit handoff + verify --require
     bootstrap_loaded_once: advisory       # the command says not to re-run it; nothing prevents expansion
     unit_state_reaches_completion: enforced      # blocked/stale/active units and void evidence refuse --require
-  cursor: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: manual}
-  codex: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: manual}
+  cursor: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: enforced_by_separate_process, fallback: manual}
+  codex: {fresh_context_unit: manual, board_evidence_scenarios_verdicts_goal: enforced, hooks_spawn_budget_guard_pen: absent, checker_isolation: enforced_by_separate_process, fallback: manual}

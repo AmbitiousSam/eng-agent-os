@@ -24,7 +24,7 @@ are binding: 0 ok · 1 refused (budget, gate, not ready, blocked) · 2 usage · 
 If the ask fits one chat, it is a **task**: continue below. If it is bigger (a product, a feature
 set, a backlog, an investigation that will spawn work), it is a **goal**: load
 `checklists/goal.md` and follow it. A goal is an intent contract you lock with the human, work items
-that each name the requirement they serve, **one item per chat**, and acceptance of the whole. If
+that each name the requirement they serve, **one item per context**, and acceptance of the whole. If
 the argument is `next`, `status` or `accept`, it refers to the open goal: `$E goal next|status <goal>`.
 
 ## Start (one command, then work)
@@ -80,6 +80,10 @@ Spawn help through the Agent tool with these definitions and **only** these inpu
   snapshot id, the check commands, `checklists/verdict.md`. **Never your transcript, your
   claims, or the builder's notes.** It records verdicts itself with `$E verify` and
   `$E scenario grade`.
+
+No isolated subagents on this host? `$E checker run <task>` starts the checker as a separate
+headless process (a genuinely clean context) and prints the runtime's verdict. Only if that fails,
+hand the human the checker packet for a new chat. Never grade your own work.
 
 Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
 task is BLOCKED on the human (`$E loopback --class hard_blocker`), never "checked by me".

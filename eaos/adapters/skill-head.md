@@ -13,9 +13,12 @@ This skill runs in Cursor, Codex or any host that loads `~/.agents/skills`. In C
 
 - You run the runtime script `~/.claude/eaos/bin/eaos` in the terminal. The human never does.
 - If this host has no isolated subagents: where the text below says to spawn `eaos-builder` or
-  `eaos-reader`, do that work yourself inside the unit. Where it says to spawn `eaos-checker`,
-  **stop and hand the human this packet to paste into a new chat**. A check made in the context that
-  built the code is not a check.
+  `eaos-reader`, do that work yourself inside the unit. Where it says to spawn `eaos-checker`, run
+  **`~/.claude/eaos/bin/eaos checker run <T-nnn>`**: it starts the checker as a separate headless
+  process (a genuinely clean context), waits, and prints APPROVE, CONDITIONAL or REJECT computed
+  from the verdicts that process recorded. A check made in the context that built the code is not
+  a check. Only if `checker run` fails (CLI missing or not signed in), hand the human this packet
+  to paste into a new chat:
 
   ```
   You are the independent checker for EAOS task <T-nnn> in this repository. You have not seen how it
@@ -26,8 +29,8 @@ This skill runs in Cursor, Codex or any host that loads `~/.agents/skills`. In C
   Grade every criterion and scenario by executing something, record each with `eaos verify` and
   `eaos scenario grade`, and finish with APPROVE, CONDITIONAL or REJECT.
   ```
-- Goal acceptance follows the same rule: a new chat, given the intent contract, `eaos goal status`
-  and the repository, and told to grade every `A-n` by execution.
+- Goal acceptance follows the same rule: `eaos checker run <goal>` (it detects a goal and grades
+  every `A-n` by execution); the new-chat packet is the fallback.
 - Spawn counting, session binding, the scenario-store guard and the pen gate are Claude Code hook
   features and are absent here. Everything
   else (board, evidence, scenarios, verdict rules, refusals) is identical because it lives in the script.

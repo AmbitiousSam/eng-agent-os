@@ -29,6 +29,8 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -3377,6 +3379,195 @@ def cmd_goal(args):
         print(f"\ncompletion: {'READY for `eaos finish`' if ok else 'not yet — ' + reason}")
         sys.exit(0)
 
+# ---------- headless hosts: a clean context without a human pasting anything ----------
+# A separate OS process is a genuinely fresh context on every host. `checker run` starts the
+# independent check that way; `drain` runs a goal's items one process each. The verdict is
+# always read back from the runtime's own records, never from what the child printed.
+# $EAOS_HOST_CMD overrides the command (tests, other hosts): it is called as
+# `<cmd...> <role> <prompt>` with role = checker | worker.
+
+def detect_host(pref):
+    if pref and pref != "auto":
+        return pref
+    if os.environ.get("EAOS_HOST"):
+        return os.environ["EAOS_HOST"]
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    if any(k.startswith("CURSOR_") for k in os.environ):
+        return "cursor"
+    for host, binary in (("claude", "claude"), ("cursor", "cursor-agent"), ("codex", "codex")):
+        if shutil.which(binary):
+            return host
+    return None
+
+def host_argv(host, role, prompt, allowed_tools=None, permission_mode=None):
+    override = os.environ.get("EAOS_HOST_CMD")
+    if override:
+        return shlex.split(override) + [role, prompt]
+    if host == "claude":
+        if role == "checker":
+            # the prompt goes FIRST: --allowedTools is variadic and swallows a trailing prompt
+            return ["claude", "-p", prompt, "--agent", "eaos-checker", "--allowedTools",
+                    "Read,Glob,Grep,Bash"]
+        return ["claude", "-p", prompt, "--permission-mode", permission_mode or "acceptEdits",
+                "--allowedTools", allowed_tools or
+                "Read,Glob,Grep,Edit,Write,MultiEdit,NotebookEdit,Bash,Task,Agent,TodoWrite"]
+    if host == "cursor":
+        return ["cursor-agent", "-p", "--force", prompt]
+    if host == "codex":
+        return ["codex", "exec", "--full-auto", prompt]
+    die(f"unknown host '{host}' (claude | cursor | codex, or set EAOS_HOST_CMD)", 2)
+
+def run_host(argv, timeout_s, log_path):
+    """Returns (rc, tail). rc 124 = timed out, 127 = host binary missing."""
+    try:
+        with open(log_path, "w", encoding="utf-8") as log:
+            r = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT, timeout=timeout_s,
+                               stdin=subprocess.DEVNULL)
+        rc = r.returncode
+    except subprocess.TimeoutExpired:
+        rc = 124
+    except FileNotFoundError:
+        return 127, f"host command not found: {argv[0]}"
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            tail = "".join(f.readlines()[-12:])
+    except OSError:
+        tail = ""
+    return rc, tail
+
+def auth_hint(tail):
+    if re.search(r"authenticat|not logged in|401|login", tail or "", re.I):
+        return ("\nThe host CLI is not signed in for terminal use. Sign in once yourself: run `claude` and "
+                "use /login, or `cursor-agent login`, or `codex login`. Then run this again.")
+    return ""
+
+def eaos_path_for_prompt():
+    installed = os.path.join(os.path.expanduser(os.environ.get("CLAUDE_HOME", "~/.claude")), "eaos", "bin", "eaos")
+    return installed if os.path.isfile(installed) else os.path.abspath(__file__)
+
+def front_door_for(host):
+    home = os.path.expanduser(os.environ.get("CLAUDE_HOME", "~/.claude"))
+    skill = os.path.join(os.path.expanduser(os.environ.get("AGENTS_SKILLS_HOME", "~/.agents/skills")),
+                         "agentic-os", "SKILL.md")
+    cmd = os.path.join(home, "commands", "agentic-os.md")
+    order = (cmd, skill) if host == "claude" else (skill, cmd)
+    return next((x for x in order if os.path.isfile(x)), order[0])
+
+def checker_prompt(task_id, state):
+    e = eaos_path_for_prompt()
+    home = os.path.expanduser(os.environ.get("CLAUDE_HOME", "~/.claude"))
+    head = (f"You are the independent checker for EAOS task {task_id} in this repository. You have not "
+            f"seen how it was built and must not look for the maker's notes or transcript. Read "
+            f"{home}/agents/eaos-checker.md and {home}/eaos/checklists/verdict.md, then run:\n"
+            f"  {e} status --packet {task_id}\n  {e} board view {task_id} --for checker\n")
+    if state.get("kind") == "goal":
+        return head + (f"  {e} goal status {task_id}\nThis is a GOAL. Read .eaos/{task_id}/intent.md. Execute every "
+                       f"acceptance line A-n against the finished whole and record each with "
+                       f"`{e} verify {task_id} --criterion A-n --verdict ... --evidence \"...\"`. Never edit product files.")
+    return head + (f"  {e} scenario list {task_id} --for checker\nGrade every criterion and scenario by executing "
+                   f"something; record each with `{e} verify` and `{e} scenario grade`. Never edit product files. "
+                   f"Finish by stating APPROVE, CONDITIONAL or REJECT.")
+
+def cmd_checker(args):
+    tid = args.id
+    state = load_state(tid)
+    if state.get("status") == "closed":
+        die(f"{tid} is closed", 1)
+    host = detect_host(args.host)
+    if not host and not os.environ.get("EAOS_HOST_CMD"):
+        die("no headless host found (claude, cursor-agent or codex on PATH); fall back to a new chat "
+            "with the checker packet", 1)
+    me = [sys.executable, os.path.abspath(__file__)]
+    sp = subprocess.run(me + ["spawn", tid, "--agent", f"eaos-checker@{host or 'custom'}"],
+                        capture_output=True, text=True)
+    if sp.returncode == 1:
+        sys.stdout.write(sp.stdout)
+        sys.exit(1)
+    log = os.path.join(task_dir(tid), f"checker-run-{int(time.time())}.log")
+    before = len(state.get("criteria", {}))
+    ts = now_iso()
+    with task_lock(tid):
+        warroom_log(tid, f"[{ts}] CHECKER RUN start host={host} log={os.path.basename(log)}")
+    rc, tail = run_host(host_argv(host, "checker", checker_prompt(tid, state)), args.timeout_min * 60, log)
+    state = load_state(tid)
+    graded = len(state.get("criteria", {})) - before
+    ok, reason, manual, unresolved = require_status(state)
+    verdict = "REJECT" if not ok else ("CONDITIONAL" if (manual or unresolved) else "APPROVE")
+    with task_lock(tid):
+        warroom_log(tid, f"[{now_iso()}] CHECKER RUN end host_rc={rc} new_verdicts={graded} runtime_says={verdict}")
+    print(tail.rstrip())
+    print(f"--- checker process exit={rc}, new verdicts recorded={graded}, log={log}")
+    if rc in (124, 127) or graded == 0:
+        print("CHECKER RUN FAILED: the process recorded no verdicts"
+              + (" (timed out)" if rc == 124 else " (host command missing)" if rc == 127 else "")
+              + " — read the log; do not grade your own work instead." + auth_hint(tail))
+        sys.exit(1)
+    print(f"{verdict} (computed by the runtime from recorded verdicts){': ' + reason if not ok else ''}")
+    sys.exit(1 if not ok else (3 if verdict == "CONDITIONAL" else 0))
+
+def cmd_drain(args):
+    gid = args.id
+    state = load_state(gid)
+    g = goal_of(state)
+    if not g.get("intent_sha"):
+        die("lock the intent first; an unattended run never compiles or locks intent", 1)
+    problems = goal_plan_problems(g)
+    if problems:
+        die("plan does not cover the intent: " + "; ".join(problems), 1)
+    host = detect_host(args.host)
+    if not host and not os.environ.get("EAOS_HOST_CMD"):
+        die("no headless host found (claude, cursor-agent or codex on PATH)", 1)
+    e = eaos_path_for_prompt()
+    deadline = time.time() + args.max_minutes * 60
+    done_now = []
+    def stop(msg, code):
+        with task_lock(gid):
+            warroom_log(gid, f"[{now_iso()}] DRAIN stop: {msg} (items finished this run: {done_now or '-'})")
+        print(f"DRAIN STOPPED: {msg}\nfinished this run: {', '.join(done_now) or 'none'}")
+        sys.exit(code)
+    with task_lock(gid):
+        warroom_log(gid, f"[{now_iso()}] DRAIN start host={host} max_items={args.max_items} max_minutes={args.max_minutes}")
+    while True:
+        g = goal_of(load_state(gid))
+        rows = [(i, *goal_item_verdict(i["task"])) for i in g["items"]]
+        ok_ids = {i["task"] for i, st, v in rows if st == "closed" and v in GOAL_OK_VERDICTS}
+        failed = [i["task"] for i, st, v in rows if st == "closed" and v not in GOAL_OK_VERDICTS]
+        if failed:
+            stop(f"item(s) closed without a pass: {', '.join(failed)} — needs you", 3)
+        ready = next((i for i, st, v in rows if st != "closed"
+                      and all(a in ok_ids for a in i.get("after", []))), None)
+        if not ready:
+            if all(st == "closed" for _, st, _ in rows):
+                stop(f"all items closed — next: `eaos checker run {gid}` then `eaos finish {gid}`", 0)
+            stop("no item is ready (dependencies open)", 3)
+        if len(done_now) >= args.max_items:
+            stop(f"item budget reached ({args.max_items})", 0)
+        left = deadline - time.time()
+        if left < 60:
+            stop(f"time budget reached ({args.max_minutes} min)", 0)
+        tid = ready["task"]
+        prompt = (f"Read {front_door_for(host)} once and follow it. The task ALREADY EXISTS: it is work item {tid} "
+                  f"('{ready['title']}', serves {', '.join(ready['serves']) or 'an investigation'}) of goal {gid}. "
+                  f"Do not create a new task. Start with `{e} status --packet {tid}` and `{e} goal status {gid}`; "
+                  f"the intent contract is .eaos/{gid}/intent.md. Do exactly this one item, then `{e} finish {tid}`. "
+                  f"You are running UNATTENDED: at any human gate (push or merge to a shared branch, deploy, "
+                  f"migration, spend, data deletion, history rewrite) or blocking question, stop, post it on the "
+                  f"board and end without finishing. Where the front door says to spawn the checker and you have "
+                  f"no subagents, run `{e} checker run {tid}`.")
+        log = os.path.join(task_dir(gid), f"drain-{tid}-{int(time.time())}.log")
+        print(f"DRAIN: running {tid} '{ready['title']}' on {host or 'custom host'} (log {log})", flush=True)
+        rc, tail = run_host(host_argv(host, "worker", prompt, args.allowed_tools, args.permission_mode), left, log)
+        status, verdict = goal_item_verdict(tid)
+        with task_lock(gid):
+            warroom_log(gid, f"[{now_iso()}] DRAIN item {tid} host_rc={rc} status={status} verdict={verdict}")
+        if status == "closed" and verdict in GOAL_OK_VERDICTS:
+            done_now.append(tid)
+            continue
+        print(tail.rstrip())
+        stop(f"{tid} did not finish with a pass (status={status}, verdict={verdict or 'none'}, host exit={rc})"
+             f" — read the log and the item's board, then run it yourself or drain again" + auth_hint(tail), 3)
+
 # ---------- finish: the three closing commands as one, stopping at the first refusal ----------
 # Run 10: a mistyped `verify` chained with `episode close` shut a task nobody had judged.
 def cmd_finish(args):
@@ -3671,6 +3862,23 @@ def build_parser():
     p_fin = sub.add_parser("finish", help="verify --require, report, episode close; stops at the first refusal")
     p_fin.add_argument("id")
     p_fin.set_defaults(func=cmd_finish)
+
+    p_chk = sub.add_parser("checker", help="run the independent checker as a separate headless process")
+    chk_sub = p_chk.add_subparsers(dest="checker_cmd", required=True)
+    p_chr = chk_sub.add_parser("run")
+    p_chr.add_argument("id")
+    p_chr.add_argument("--host", default="auto", help="auto | claude | cursor | codex")
+    p_chr.add_argument("--timeout-min", type=int, default=30)
+    p_chr.set_defaults(func=cmd_checker)
+
+    p_drain = sub.add_parser("drain", help="run a goal's ready items unattended, one headless process each")
+    p_drain.add_argument("id")
+    p_drain.add_argument("--max-items", type=int, default=3)
+    p_drain.add_argument("--max-minutes", type=int, default=90)
+    p_drain.add_argument("--host", default="auto")
+    p_drain.add_argument("--permission-mode", default=None, help="claude only (default acceptEdits)")
+    p_drain.add_argument("--allowed-tools", default=None, help="claude only")
+    p_drain.set_defaults(func=cmd_drain)
 
     p_goal = sub.add_parser("goal", help="goal level: intent contract, work items, traceability")
     goal_sub = p_goal.add_subparsers(dest="goal_cmd", required=True)

@@ -56,3 +56,4 @@ pre-registration). Grading harness not yet written.
 - 2026-09-18: one-step install (install.sh), global skill for Cursor/Codex, --uninstall, README rewrite (e3d8feb). Open: LICENSE, first real Cursor run, E0.
 - 2026-09-19: repo = eaos/ + tests/ + lab/. Gate: bash tests/run.sh. Pending decision from external review: promote scenario guard + writer gate hooks, finish verb, routing row fix. Open: LICENSE, first Cursor run, E0.
 - 2026-09-19: v4.3.0 = task level + goal level under /agentic-os. Gate: bash tests/run.sh. Open: LICENSE, a real multi-chat goal, a Cursor task, E0.
+- 2026-09-19: v4.4.0 headless checker + drain. NOT yet proven on a real host: CLIs not signed in here. Next: user signs in, runs the scratch check (see log).

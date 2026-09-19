@@ -2816,7 +2816,7 @@ class TestDriftAtTaskLevel(V4Case):
         self.assertIn("AC-9", out)
 
 
-class TestGoalLevel(V4Case):
+class GoalBase(V4Case):
     """One goal, many tasks, many chats: locked intent, items that serve requirements,
     completion read from the items' own records."""
 
@@ -2847,6 +2847,8 @@ class TestGoalLevel(V4Case):
         run(self.cwd, "verify", tid, "--criterion", "AC-1", "--verdict", verdict, "--evidence", "executed: observed the result")
         return run(self.cwd, "finish", tid)[0]
 
+
+class TestGoalLevel(GoalBase):
     def test_goal_verbs_refuse_a_non_goal_task(self):
         self.assertEqual(run(self.cwd, "goal", "lock", self.tid)[0], 2)
 
@@ -2929,6 +2931,117 @@ class TestGoalLevel(V4Case):
         self.assertIn("READY", status)
         self.assertIn("| R-2 |", status)
         self.assertEqual(run(self.cwd, "finish", self.gid)[0], 0)
+
+
+FAKE_HOST = r"""#!/usr/bin/env python3
+# Stand-in for claude / cursor-agent: reads the role and prompt, behaves per FAKE_MODE.
+import os, re, subprocess, sys
+role, prompt = sys.argv[-2], sys.argv[-1]
+eaos, mode = os.environ["FAKE_EAOS"], os.environ.get("FAKE_MODE", "good")
+def e(*a): return subprocess.run([sys.executable, eaos, *a], capture_output=True, text=True)
+with open(os.environ["FAKE_LOG"], "a") as f: f.write(role + "|" + prompt[:80].replace("\n", " ") + "\n")
+if mode == "silent": sys.exit(0)
+if role == "checker":
+    tid = re.search(r"task (T-\d+)", prompt).group(1)
+    ids = re.findall(r"^- (A-\d+)", open(f".eaos/{tid}/intent.md").read(), re.M) if "GOAL" in prompt else ["AC-1"]
+    for c in ids: e("verify", tid, "--criterion", c, "--verdict", "failed" if mode == "reject" else "verified", "--evidence", f"ran {c}: observed")
+    print("APPROVE, trust me" if mode == "reject" else "done")
+else:
+    tid = re.search(r"work item (T-\d+)", prompt).group(1)
+    if mode == "stall": print("needs a human gate"); sys.exit(0)
+    e("verify", tid, "--criterion", "AC-1", "--verdict", "verified", "--evidence", f"built and ran {tid}")
+    e("finish", tid)
+"""
+
+
+class HeadlessCase(GoalBase):
+    def setUp(self):
+        super().setUp()
+        self.fake = os.path.join(self.cwd, "fake_host.py")
+        with open(self.fake, "w") as f:
+            f.write(FAKE_HOST)
+        self.fake_log = os.path.join(self.cwd, "fake.log")
+        os.environ.update({"EAOS_HOST_CMD": f"{sys.executable} {self.fake}", "FAKE_EAOS": EAOS,
+                           "FAKE_LOG": self.fake_log, "FAKE_MODE": "good"})
+
+    def tearDown(self):
+        for k in ("EAOS_HOST_CMD", "FAKE_EAOS", "FAKE_LOG", "FAKE_MODE"):
+            os.environ.pop(k, None)
+        super().tearDown()
+
+
+class TestCheckerRun(HeadlessCase):
+    """The independent check as a separate process; the verdict comes from the runtime."""
+
+    def test_approve_is_computed_from_recorded_verdicts(self):
+        rc, out, err = run(self.cwd, "checker", "run", self.tid)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("APPROVE (computed by the runtime", out)
+        with open(os.path.join(self.cwd, ".eaos", self.tid, "state.json")) as f:
+            self.assertEqual(json.load(f)["spawns"]["count"], 1)      # counted on every host
+
+    def test_child_saying_approve_cannot_override_a_failed_verdict(self):
+        os.environ["FAKE_MODE"] = "reject"
+        rc, out, err = run(self.cwd, "checker", "run", self.tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("REJECT", out)
+
+    def test_a_process_that_records_nothing_is_a_failed_run_not_a_pass(self):
+        os.environ["FAKE_MODE"] = "silent"
+        rc, out, err = run(self.cwd, "checker", "run", self.tid)
+        self.assertEqual(rc, 1)
+        self.assertIn("recorded no verdicts", out)
+
+    def test_goal_acceptance_runs_headless_too(self):
+        self.lock()
+        for t in (self.item("expiry", "R-1"), self.item("404s", "R-2")):
+            self.assertEqual(self.close_item(t), 0)
+        rc, out, err = run(self.cwd, "checker", "run", self.gid)
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(run(self.cwd, "finish", self.gid)[0], 0)
+
+
+class TestDrain(HeadlessCase):
+    """Unattended: one process per item, hard budgets, stops the moment an item does not pass."""
+
+    def test_refuses_without_a_locked_covering_plan(self):
+        self.assertEqual(run(self.cwd, "drain", self.gid)[0], 1)
+        self.lock()
+        self.item("expiry", "R-1")
+        rc, out, err = run(self.cwd, "drain", self.gid)
+        self.assertEqual(rc, 1)
+        self.assertIn("R-2", err)
+
+    def test_drains_in_dependency_order_then_points_at_acceptance(self):
+        self.lock()
+        a = self.item("expiry", "R-1")
+        b = self.item("404s", "R-2", after=a)
+        rc, out, err = run(self.cwd, "drain", self.gid, "--max-items", "5")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("all items closed", out)
+        with open(self.fake_log) as f:
+            order = [ln for ln in f.read().splitlines() if ln.startswith("worker|")]
+        self.assertEqual(len(order), 2)
+        self.assertLess(out.index(a), out.index(b))
+
+    def test_item_budget_is_a_hard_stop(self):
+        self.lock()
+        self.item("expiry", "R-1"); self.item("404s", "R-2")
+        rc, out, err = run(self.cwd, "drain", self.gid, "--max-items", "1")
+        self.assertEqual(rc, 0)
+        self.assertIn("item budget reached", out)
+        with open(self.fake_log) as f:
+            self.assertEqual(f.read().count("worker|"), 1)
+
+    def test_an_item_that_does_not_pass_stops_the_drain(self):
+        self.lock()
+        self.item("expiry", "R-1"); self.item("404s", "R-2")
+        os.environ["FAKE_MODE"] = "stall"
+        rc, out, err = run(self.cwd, "drain", self.gid, "--max-items", "5")
+        self.assertEqual(rc, 3)
+        self.assertIn("did not finish with a pass", out)
+        with open(self.fake_log) as f:
+            self.assertEqual(f.read().count("worker|"), 1)      # never moved on to the second item
 
 
 if __name__ == "__main__":

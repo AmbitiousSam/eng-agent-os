@@ -144,3 +144,6 @@ User: still too many files/folders. Collapsed product into eaos/ (front door, ag
 
 ## 2026-09-19 — v4.3.0: one product, two levels
 User tested a split (EAOS vs separate factory); I agreed too fast, then corrected: factory level owns no verification logic -> one product. Built goal level in the runtime (kind=goal, locked intent R-n/A-n, items linked by goal field not parent, plan check, next, status, acceptance as criteria on the goal, completion via require_status), finish verb, unit --criterion drift checks, guard hook (scenario store + pen), goal checklist, intent template. Entry stays /agentic-os. Gates 182/96/31/133. Open: LICENSE (user), first real multi-chat goal, first Cursor task, E0.
+
+## 2026-09-19 — v4.4.0: autonomy
+User: pasting into a new chat loses autonomy. Agreed. Built: eaos checker run (headless separate process, verdict computed by runtime, counted as spawn), eaos drain (one process per goal item, hard budgets, stops at first non-pass), goal rule relaxed to one item per CONTEXT (builder subagent in Claude Code). Fake-host tests (8). First REAL claude -p run found a variadic --allowedTools bug (fixed: prompt first); then stopped at auth: neither claude nor cursor-agent CLI is signed in for terminal use on this machine — user must /login. Gates 190/96/31/133.
