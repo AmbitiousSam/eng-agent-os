@@ -214,3 +214,20 @@ Fixes (v4.5.6): the goal-side note is `CHARGED ...`, not a spawn line; the audit
 in real war rooms; a refused spawn now prints the live budget and how it is computed; `phase --unblock` no longer
 demands a v3 phase name. Replayed on a copy of the real state: audit clean, unblock, item checker 2/14, acceptance
 checker 13/27, audit clean.
+
+### Run 17, completion (v4.5.7) — first real goal closed, conditional-manual
+After `eaos goal next` began printing the live budget, the lead cleared the stale block itself with a recorded
+reason ("live spawn budget goal 12/27, T-047 1/14 has room for checker"), ran T-047's checker (spawn charged to the
+item, 2/14), then the acceptance checker on the goal.
+**The acceptance check found two integration defects that every item-level checker had passed:**
+- PREP follow-ups could never appear in the digest: `dueAt` is the future interview date, the digest requires
+  `dueAt <= now`, and the scan expires PREP once `dueAt <= now`, before the digest runs. Two items, each correct
+  alone, wrong together.
+- Archived applications were still counted in the dashboard aggregate, the recent list and `getApplicationStats`.
+The lead did what the goal checklist says: it did not reopen verdicts, it added a `fix` item (T-048, serves R-6 and
+R-8), built it, had it checked, and then finished. Final state: 13 requirements, 6 items; A-1..A-13 = 11 verified,
+2 `manual_confirmation_required` (a browser click-through and the 375px layout). Goal verdict conditional-manual.
+Audits clean on the goal and every item. Independently confirmed: lint 0 errors, tsc 0, vitest 463 pass / 2 skipped
+(65 files). 74 files changed, 38 new follow-through files, nothing committed or pushed.
+This is the first evidence for the goal level's reason to exist: all items verified, and the whole still wrong,
+caught by a clean-context check of the acceptance lines.

@@ -186,8 +186,10 @@ v4.5.7. Seventeen real runs on a private production codebase were reviewed and e
 exposed was fixed (`lab/evals/results/2026-09-18-v4-first-runs.md`). In those runs the checker caught
 real bugs three times, no session compacted, and tasks used 1 to 4 subagents.
 
-The goal level has run one real product-sized goal (13 requirements, 5 items, parallel readers, builder and
-checker subagents per item); four items closed and the fifth was blocked by a spawn-budget defect fixed in v4.5.5.
+The goal level has completed one real product-sized goal (13 requirements, 6 items, parallel readers, a builder
+and a checker subagent per item). Its acceptance check caught two integration defects that every item-level
+check had passed; the lead added a fix item and the goal closed conditional, with two lines left for a human
+with a browser.
 
 Not yet shown: that EAOS beats the same model with no EAOS. The controlled experiment is
 pre-registered and its grader is built, but it has not been run. The Cursor and Codex path is built
