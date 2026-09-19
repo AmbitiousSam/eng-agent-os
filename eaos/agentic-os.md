@@ -81,9 +81,8 @@ Spawn help through the Agent tool with these definitions and **only** these inpu
   claims, or the builder's notes.** It records verdicts itself with `$E verify` and
   `$E scenario grade`.
 
-No isolated subagents on this host? `$E checker run <task>` starts the checker as a separate
-headless process (a genuinely clean context) and prints the runtime's verdict. Only if that fails,
-hand the human the checker packet for a new chat. Never grade your own work.
+If this host truly cannot start a fresh context, say the check needs a new chat and stop. Never
+grade your own work.
 
 Readers and checkers contribute intelligence, not edits. If no checker slot remains, the
 task is BLOCKED on the human (`$E loopback --class hard_blocker`), never "checked by me".

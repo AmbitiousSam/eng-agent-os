@@ -147,3 +147,6 @@ User tested a split (EAOS vs separate factory); I agreed too fast, then correcte
 
 ## 2026-09-19 — v4.4.0: autonomy
 User: pasting into a new chat loses autonomy. Agreed. Built: eaos checker run (headless separate process, verdict computed by runtime, counted as spawn), eaos drain (one process per goal item, hard budgets, stops at first non-pass), goal rule relaxed to one item per CONTEXT (builder subagent in Claude Code). Fake-host tests (8). First REAL claude -p run found a variadic --allowedTools bug (fixed: prompt first); then stopped at auth: neither claude nor cursor-agent CLI is signed in for terminal use on this machine — user must /login. Gates 190/96/31/133.
+
+## 2026-09-19 — v4.5.0: hosts own their subagents
+User showed Cursor spawning parallel subagents; docs confirm isolated context + loads ~/.claude/agents/. My 'no subagents on Cursor' premise was unverified and wrong. Deleted checker run, drain, host detection, paste packet, solo-mode.md, AGENTS.md fallback (~200 lines + 8 tests). One instruction for all hosts: spawn eaos-checker. Lesson: verify host capability from docs before building around its absence.

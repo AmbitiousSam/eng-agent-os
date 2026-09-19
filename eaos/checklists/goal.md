@@ -32,20 +32,17 @@ between chats except `.eaos/`.
   front door (criteria, units, checker at its stakes, `$E finish <item>`). Carry the requirement
   ids it serves into its acceptance criteria.
 - The rule is that each item's work happens in a fresh context, so the goal never grows one giant
-  transcript. Three ways, most autonomous first:
-  1. **Unattended:** `$E drain <goal> --max-items N --max-minutes M` runs the ready items one
-     headless process each and stops at the budget, at the first item that does not pass, or when
-     all are closed. Offer this to the human; it spends their usage without them watching.
-  2. **Same chat, with subagents (Claude Code):** give the item's build to `eaos-builder`, then spawn
-     `eaos-checker`. You keep only summaries, so continue with the next item. Stop when
-     `$E status --packet` says OVER CEILING and ask for a fresh chat with `/agentic-os next`.
-  3. **No subagents, no headless CLI:** one item, then ask for a fresh chat with `/agentic-os next`.
+  transcript. Give the item's build to `eaos-builder`, then spawn `eaos-checker`. You keep only
+  summaries, so continue with the next item in the same chat. Stop when `$E status --packet` says
+  OVER CEILING and ask for a fresh chat with `/agentic-os next`. Independent items on disjoint scopes
+  may go to parallel builders in separate worktrees; the host runs them, the pen rule still holds.
+- A host that cannot spawn a subagent: one item, then ask for a fresh chat with `/agentic-os next`.
 - An item that closes without a pass blocks the goal. Fix it with a new item; do not reopen verdicts.
 
 ## 4. Status and acceptance
 - `$E goal status <goal>` prints requirement -> items -> verdicts, and the acceptance lines.
 - When `goal next` says all items are closed: acceptance is graded **by the checker in a clean
-  context** (`eaos-checker` subagent, or `$E checker run <goal>` on a host without subagents), given only the intent contract, `goal status` and the repository, by executing each
+  context** (the `eaos-checker` subagent), given only the intent contract, `goal status` and the repository, by executing each
   `A-n`: `$E verify <goal> --criterion A-1 --verdict ... --evidence "<what ran, what happened>"`.
   This is where drift shows: every item verified and an acceptance line still failing.
 - `$E finish <goal>` refuses while any item is open or failed, any requirement lacks an item, the

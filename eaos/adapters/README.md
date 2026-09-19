@@ -1,22 +1,23 @@
-# EAOS adapters — capability, not equality
+# EAOS across hosts
 
-EAOS v4 is markdown plus one runtime script the agent runs, so any host that can run a command can use it. A
-new chat reproduces a context boundary; it does not reproduce permissions or enforcement.
-`routing.yaml > adapters` records, per host, what each capability actually
-is: **enforced** (a runtime or hook refuses the wrong action), **measured** (recorded, not
-prevented), **advisory** (a documented rule), **manual** (the human does it), **planned**.
+EAOS is markdown plus one runtime script the agent runs. The host (Claude Code, Cursor, Codex) owns
+models, tools, permissions and subagents. EAOS does not manage agents; it names three boundaries
+(`eaos-builder`, `eaos-reader`, `eaos-checker`) and the host spawns them, each in its own fresh context.
+Claude Code and Cursor both load them from `~/.claude/agents/`, where `setup.sh` installs them.
 
-| Capability | Claude Code | Other hosts |
+`routing.yaml > adapters` records what each capability actually is per host: **enforced** (the script
+or a hook refuses the wrong action), **measured** (recorded, not prevented), **advisory** (a documented
+rule), **absent**.
+
+| Capability | Claude Code | Cursor, Codex |
 |---|---|---|
-| Fresh-context unit | enforced (Agent subagent) | manual: new chat + `eaos status --packet` |
-| Checker without the maker's transcript | advisory (prompt construction; artifacts stay readable) | advisory |
-| Spawn budget and blocked-task gate | enforced via PreToolUse hook, fail-open on infrastructure | advisory |
-| Stop-time audit | enforced via Stop hook, fail-open on infrastructure | advisory |
-| Check evidence bound to a snapshot | enforced by `eaos check` + `unit handoff` | enforced (same CLI) |
-| Writer lease | advisory (runtime lease; edits not gated) | advisory |
-| Context ceiling | measured (Stop hook records size; cannot force a reset) | manual |
+| Board, snapshot-bound evidence, scenarios, goals, verdict rules | enforced (script) | enforced (same script) |
+| Fresh-context builder, reader, checker | host subagent | host subagent |
+| Checker never receives the maker's transcript | advisory (how the lead builds the prompt) | advisory |
+| Spawn budget, session binding, stop-time audit | hook, fails open on infrastructure | absent |
+| Scenario store unreachable by tools; one writer per workspace | hook (not against a disguised shell command or `sed`) | absent |
+| Context ceiling | measured by hook; cannot force a reset | absent |
 
-`solo-mode.md` is the manual procedure for a host without subagents: the checker is a new
-session given only the spec, the diff, the board view for checkers and the check commands.
-`AGENTS.md` is the entry point for Cursor, Codex and any host that reads that file: copy it to a
-project root. It points at the one front door and names the host deltas; it does not restate the rules.
+`skill-head.md` is the header `setup.sh` puts in front of the front door when it generates the global
+skill for Cursor and Codex. A host with no way to start a fresh context gets one rule from the front
+door: say the check needs a new chat and stop; never grade your own work.

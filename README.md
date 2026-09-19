@@ -57,7 +57,7 @@ command fails, show the user its last ten lines and stop. To verify later:
 |---|---|---|
 | `~/.eaos-src/` | this repository (the installer updates it with `git pull`) | installer |
 | `~/.claude/commands/agentic-os.md` | the front door | Claude Code |
-| `~/.claude/agents/eaos-{builder,reader,checker}.md` | three tool-scoped boundaries | Claude Code |
+| `~/.claude/agents/eaos-{builder,reader,checker}.md` | three boundaries the host spawns as subagents | Claude Code, Cursor |
 | `~/.agents/skills/agentic-os/SKILL.md` | the same front door as a global skill, generated at install | Cursor, Codex |
 | `~/.claude/eaos/` | the runtime script, checklists, templates, config | every host |
 | `~/.claude/settings.json` | four hook entries, only if Claude Code is installed; the file is backed up first | Claude Code |
@@ -65,7 +65,7 @@ command fails, show the user its last ten lines and stop. To verify later:
 In your projects EAOS writes one folder, `.eaos/`, holding task state. Add it to `.gitignore` or
 commit it, your choice.
 
-Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.4.0` pins a release, `EAOS_SRC=<dir>` moves
+Options: `EAOS_NO_HOOKS=1` skips the hooks, `EAOS_REF=v4.5.0` pins a release, `EAOS_SRC=<dir>` moves
 the checkout. Working from a clone instead: `./setup.sh`, then optionally
 `./eaos/runtime/install-eaos-hooks.sh`.
 
@@ -126,12 +126,9 @@ You type the task. The agent then, on its own:
 3. Works in units. Findings, decisions and risks go on the board, not into its own narration.
 4. Runs the project's real test, lint, type and build commands through the runtime, which binds each
    result to the current code snapshot.
-5. Hands the result to an independent checker that never sees how it was built. In Claude Code that
-   is a subagent. In Cursor and Codex the agent runs `eaos checker run`, which starts the checker as
-   a separate headless process (`cursor-agent -p`, `codex exec`, `claude -p`): a genuinely clean
-   context, nothing for you to paste. The verdict is computed by the runtime from what that process
-   recorded, never from what it said. Pasting a packet into a new chat is only the fallback when the
-   host's command-line tool is missing or not signed in.
+5. Hands the result to an independent checker that never sees how it was built: the `eaos-checker`
+   subagent, which the host starts in its own fresh context. Claude Code and Cursor both load it from
+   `~/.claude/agents/`. Nothing for you to paste or open.
 6. Closes with a verdict the runtime computes (`verified`, `conditional-manual`, `partial`,
    `unverified`) and a final report: asked, built, checked with proof, decided, not done, needs you.
 
@@ -143,7 +140,7 @@ Same command. The agent recognises a product, a feature set or a backlog and ope
 flowchart TD
     g1["1. Intent contract, locked with you<br/>requirements, non-goals, acceptance, hashed"] --> g2["2. Work items, plan checked<br/>each serves a requirement: no orphans, no creep"]
     g2 --> g3
-    subgraph g3["3. One item per fresh context: subagent, eaos drain, or a new chat"]
+    subgraph g3["3. One item per fresh context: host subagents, same chat"]
         direction LR
         c1["Context 1<br/>item = task"] --> c2["Context 2<br/>item = task"] --> c3["Context n<br/>item = task"]
     end
@@ -157,25 +154,11 @@ flowchart TD
 2. It breaks the goal into work items. Each item names the requirement it serves. The runtime refuses
    a plan with a requirement nobody serves or an item that serves nothing.
 3. Each item runs as a normal task in **its own fresh context**, so the goal never becomes one giant
-   transcript. In Claude Code the agent hands each item to a builder subagent and keeps going in the
-   same chat until its context ceiling. Or you let it run unattended (below). Otherwise: one item,
-   then `/agentic-os next` in a new chat.
+   transcript: the agent hands each item to a builder subagent, then a checker subagent, and keeps
+   going in the same chat until its context ceiling. Then you type `/agentic-os next` in a new chat.
 4. `/agentic-os status` prints requirement, items, verdicts, evidence.
 5. At the end an independent checker grades the acceptance lines against the finished whole. A goal
    cannot finish while an item failed, a requirement is unserved, or an acceptance line is ungraded.
-
-### Unattended: drain a goal
-
-```bash
-~/.claude/eaos/bin/eaos drain <goal> --max-items 3 --max-minutes 90
-```
-
-Runs the goal's ready items one headless process each, in dependency order. It stops at the item
-budget, at the time budget, when everything is closed, or **the moment an item does not finish with a
-pass** (a human gate, a blocking question, a failed check), and tells you which. It never compiles or
-locks intent, never grades acceptance, and the agents it starts are told to stop at every human gate.
-It spends your usage while you are not watching: start with small budgets. The host's command-line
-tool must be signed in once (`claude` then `/login`, `cursor-agent login`, `codex login`).
 
 **Where you are still asked, on purpose:** your yes before an intent contract is locked, and the human
 gates below. Everything between those runs without you.
@@ -190,25 +173,20 @@ You never run the runtime script. The agent does, the way it runs `git`.
 | Capability | Claude Code | Cursor, Codex |
 |---|---|---|
 | Board, snapshot-bound evidence, scenarios, verdict rules, refusals | enforced | enforced (same script) |
-| Independent checker | isolated subagent | separate headless process via `eaos checker run`; new-chat packet only as fallback |
-| Unattended goal drain (`eaos drain`) | yes | yes |
-| Parallel read-only researchers | subagents | not available |
+| Builder, parallel readers, independent checker | host subagents | host subagents (Cursor loads the same `~/.claude/agents/`) |
 | Goals: locked intent, item traceability, acceptance of the whole | enforced | enforced (same script) |
 | Scenario store unreachable by tools; one writer per workspace | hooks (not against a disguised shell command or `sed`) | not available |
 | Spawn budget, session binding, stop-time audit, context size | hooks | not available |
 
-`eaos/adapters/README.md` has the full table. `eaos/adapters/AGENTS.md` is a drop-in for hosts that read
-`AGENTS.md` but do not load skills.
+`eaos/adapters/README.md` has the full table. EAOS does not manage agents: the host spawns them.
 
 ## Status, honestly
 
-v4.4.0. Twelve real runs on a private production codebase were reviewed and every defect they
+v4.5.0. Twelve real runs on a private production codebase were reviewed and every defect they
 exposed was fixed (`lab/evals/results/2026-09-18-v4-first-runs.md`). In those runs the checker caught
 real bugs three times, no session compacted, and tasks used 1 to 4 subagents.
 
-The goal level (v4.3.0) and the headless checker and drain (v4.4.0) pass their tests, including against a
-fake host, but have not yet completed a real run: a real headless run needs the host's command-line tool
-signed in on your machine.
+The goal level (v4.3.0) passes its tests but has not yet completed a real multi-item goal.
 
 Not yet shown: that EAOS beats the same model with no EAOS. The controlled experiment is
 pre-registered and its grader is built, but it has not been run. The Cursor and Codex path is built
@@ -226,7 +204,7 @@ Three folders. The product is `eaos/`, about thirty files, and it is all the ins
 | `eaos/agents/` | builder, reader, checker: tool-scoped boundaries, no personas |
 | `eaos/checklists/` | twelve, loaded on demand: goal, intake, build, research, review, security, test-adequacy, verdict, deploy-rehearsal, operability, incident, reporting |
 | `eaos/runtime/` | `eaos` (the script the agent runs), the Claude Code hook and its installer, doctor, `routing.yaml` |
-| `eaos/adapters/` | skill header for Cursor and Codex, `AGENTS.md` fallback, solo-mode procedure, capability table |
+| `eaos/adapters/` | the header for the Cursor and Codex skill, and the per-host capability table |
 | `eaos/templates/` | final report, ADR, task spec, test plan and the other documents the checklists name |
 | `tests/` | `run.sh` runs everything: runtime tests, hook tests, installer tests, repo validator |
 | `lab/` | not product: specs, research, review records, experiment protocol, measured results |

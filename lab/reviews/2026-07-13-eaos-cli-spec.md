@@ -150,3 +150,7 @@ New verbs, same exit-code contract (0 ok · 1 refused · 2 usage · 3 conditiona
   plan that does not cover it (1). Never locks intent, never grades acceptance.
 - `$EAOS_HOST_CMD` replaces the host command (`<cmd...> <role> <prompt>`); used by the tests' fake host.
 - claude invocation puts the prompt before `--allowedTools` (variadic; found by the first real run).
+
+## v4.5.0 (2026-09-19)
+
+`checker run`, `drain` and `$EAOS_HOST_CMD` are removed. They assumed hosts without subagents; Cursor has them and loads `~/.claude/agents/`. Design: `lab/specs/2026-09-19-hosts-own-their-subagents-design.md`.

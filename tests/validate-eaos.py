@@ -74,7 +74,7 @@ def exists(rel):
 # ---------- 1. core files / dirs present ----------
 REQUIRED = ["commands/agentic-os.md", "runtime/routing.yaml", "setup.sh", "README.md",
             "runtime/eaos", "runtime/eaos-hook.sh", "lab/mechanisms.yaml",
-            "lab/EVAL-PROTOCOL.md", "adapters/solo-mode.md"]
+            "lab/EVAL-PROTOCOL.md", "adapters/skill-head.md"]
 for r in REQUIRED:
     (ok if exists(r) else err)(f"required file: {r}")
 for d in ["agents", "checklists", "templates", "adapters"]:

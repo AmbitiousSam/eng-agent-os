@@ -15,7 +15,7 @@ echo "========================================"
 
 echo "Installation (~/.claude):"
 for f in commands/agentic-os.md eaos/routing.yaml eaos/bin/eaos eaos/bin/eaos-hook.sh \
-         eaos/adapters/solo-mode.md agents/eaos-builder.md agents/eaos-reader.md agents/eaos-checker.md; do
+         agents/eaos-builder.md agents/eaos-reader.md agents/eaos-checker.md; do
   [ -e "$CLAUDE_DIR/$f" ] && pass "~/.claude/$f" || bad "~/.claude/$f missing — run ./setup.sh"
 done
 SKILL_MD="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}/agentic-os/SKILL.md"

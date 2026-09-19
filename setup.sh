@@ -121,7 +121,7 @@ fi
 # 2) INSTALL v4  (directories are created only here — a --dry-run has exited above)
 # ---------------------------------------------------------------------------------------
 mkdir -p "$AGENTS_DIR" "$COMMANDS_DIR" "$CONFIG_DIR/templates" "$CONFIG_DIR/checklists" \
-         "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin"
+         "$CONFIG_DIR/bin"
 say "Installing /agentic-os -> $COMMANDS_DIR"
 install_file "$EAOS_DIR/eaos/agentic-os.md" "$COMMANDS_DIR/agentic-os.md"
 
@@ -148,10 +148,10 @@ say "Installing config, checklists, templates, adapters -> $CONFIG_DIR"
 install_file "$EAOS_DIR/eaos/runtime/routing.yaml" "$CONFIG_DIR/routing.yaml"
 for f in "$EAOS_DIR"/eaos/checklists/*.md; do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/checklists/$(basename "$f")"; done
 for f in "$EAOS_DIR"/eaos/templates/*.md;  do [ -e "$f" ] && install_file "$f" "$CONFIG_DIR/templates/$(basename "$f")"; done
-install_file "$EAOS_DIR/eaos/adapters/solo-mode.md" "$CONFIG_DIR/adapters/solo-mode.md"
-install_file "$EAOS_DIR/eaos/adapters/AGENTS.md" "$CONFIG_DIR/adapters/AGENTS.md"
+# retired in v4.5.0: hosts spawn their own subagents, so there is no manual-checker procedure to ship
+rm -rf "$CONFIG_DIR/adapters"
 # litter from earlier installs' per-file backups inside EAOS-owned folders
-find "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/adapters" "$CONFIG_DIR/bin" -maxdepth 1 -name '*.bak' -delete 2>/dev/null || true
+find "$CONFIG_DIR/checklists" "$CONFIG_DIR/templates" "$CONFIG_DIR/bin" -maxdepth 1 -name '*.bak' -delete 2>/dev/null || true
 rm -f "$CONFIG_DIR/routing.yaml.bak"
 # stale checklists/templates from a previous v4 install that no longer exist upstream
 for f in "$CONFIG_DIR"/checklists/*.md; do [ -e "$f" ] && [ ! -e "$EAOS_DIR/eaos/checklists/$(basename "$f")" ] && rm -f "$f"; done

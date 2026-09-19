@@ -9,7 +9,7 @@ sources: [agents/verifier.md, commands/agentic-os.md (Step 10), orchestrator/loo
 ## Inputs and independence
 - Grade from the requirements (acceptance criteria), the delivered code or artifacts, the project's check commands, observed evidence (check outputs, logs, command results), recorded decisions and unresolved risks.
 - No maker transcript and no maker self-review. If authoring context is handed over, discard it and grade from the spec. Evidence is not excluded because the maker found it: a log line is a log line (v4 K-1).
-- Independence only holds in a genuinely fresh context. In a single-context tool, do not simulate a checker in the same context; use a new session given only the spec, the diff and the check commands (`adapters/solo-mode.md`).
+- Independence only holds in a genuinely fresh context. Never simulate a checker in the context that built the code: the host spawns `eaos-checker` as a subagent; a host that cannot gets a new chat given only the spec, the board view for checkers and the check commands.
 - Trivial and small work: a brief self-score against the criteria suffices. Standard and complex work: the independent check is required before the task can close.
 
 ## Evidence per criterion
