@@ -159,3 +159,6 @@ Bare prompt, 16 set-state-in-effect errors, 12 files: lead chose internal, check
 
 ## 2026-09-19 — run 15
 Real dashboard feature in synergina: one internal task (not a goal), scenarios before first edit, checker failed AC-3 against the lead's own spec and graded mobile manual; finish refused; lead left task ACTIVE for the human. Best run so far; no EAOS change needed. My size predictions (stakes, goal) wrong three runs in a row: the model sizes work better than I do.
+
+## 2026-09-19 — run 16 + v4.5.4
+Goal-level test sized as one task again (4 min, lint 64->0, CI blocking; verified independently). Goal level has never fired: model only needs it beyond one context. Checker approved metric gaming: loose() helper laundering ~40 any. Fix: metric-criteria rule in checker def, verdict and intake checklists (text only).

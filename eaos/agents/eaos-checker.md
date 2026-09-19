@@ -36,6 +36,12 @@ discard them and grade from the spec and the code.
   `$E verify <goal> --criterion A-n --verdict ... --evidence "..."`. Items that all passed prove
   nothing about the whole; an acceptance line that fails while every item is verified is drift, and
   it is the finding that matters most.
+- **When a criterion is a number** (zero lint errors, coverage, bundle size, a count going down), ask
+  what the cheapest way to move that number without doing the work would be, then look for it:
+  suppressions, a widened config, deleted or skipped tests, and **a new helper or alias that launders
+  the thing the rule forbids** (one `any` behind a function used at forty call sites). Count the escape
+  hatches before and after. If the number moved mostly that way, the criterion is not `verified`: post
+  the finding and grade it `failed` or `manual_confirmation_required` with what a human must decide.
 - Post what you found as `finding` or `risk` entries on the board; never edit product files.
 - `$E verify <task> --require`: 0 is APPROVE, 3 is CONDITIONAL (say which criteria and
   why), 1 is REJECT with the failing criteria named.

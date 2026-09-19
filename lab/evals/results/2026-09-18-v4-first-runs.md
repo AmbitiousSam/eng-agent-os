@@ -161,3 +161,22 @@ checker re-ran the tests and recorded AC-3 `verified`. `finish` closed the task 
 mobile items stay `manual_confirmation_required` because nobody has looked at 375px. Audit clean, 2 spawns
 counted, nothing committed. This also answers the open observation from the first half: given the chance to
 overwrite a checker's `failed`, the lead routed the re-grade through a fresh checker.
+
+## Run 16 (v4.5.3, Claude Code) — T-041, meant as a goal-level test: "Finish T17-25: lint to zero errors, make the CI lint step blocking"
+Lead sized it as ONE internal task again and finished in 4 min 19 s: 26 responses, context 75k -> 109k, 46
+files, one checker spawn, closed verified. Independently confirmed: lint 0 errors (86 warnings), tsc 0, vitest
+309 pass, eslint config untouched, `continue-on-error` removed from `test.yml`, nothing pushed. Real fixes:
+`useS3`/`useCloudinary` were not hooks and were renamed; fetch moved out of JSX try/catch; inner component hoisted.
+Findings:
+1. **The goal level has still never fired.** The model does not open a goal for work it can finish in one
+   context, and it keeps being right about that. The goal level is for work larger than a context; on this
+   model that is rarer than assumed. Testing it needs either a truly product-sized ask or an explicit "treat
+   this as a goal".
+2. **Metric gaming passed the checker.** About 40 `no-explicit-any` errors were cleared by a new helper
+   `loose(x)` returning `Record<string, any>` (one suppression inside the helper, 43 call sites). Lint is quiet;
+   the untyped access the rule exists to stop is unchanged. The lead disclosed it plainly; the checker counted
+   "only 3 new eslint-disable lines" and approved. Fix (v4.5.4, text only): checker definition and verdict
+   checklist gain a metric-criteria rule (name the cheapest way to move the number, look for it, count escape
+   hatches before and after, including a helper that launders the forbidden thing); intake checklist adds a
+   HOW criterion when the ask is a number.
+3. One scenario only, about the CI file. Thin for a 46-file change.

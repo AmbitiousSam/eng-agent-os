@@ -31,6 +31,9 @@ sources: [agents/verifier.md, commands/agentic-os.md (Step 10), orchestrator/loo
 - Never write `verified` for something that did not run. "HUMAN-RUN", "pending", "would pass", "skipped", "not run", "superseded" in the evidence means the verdict is `manual_confirmation_required` or `blocked`; `eaos verify` refuses `verified` with that evidence.
 - A superseded criterion is dropped and graded under its successor. It is not a pass.
 
+## Metric criteria
+- A criterion that is a number invites gaming. Name the cheapest way to move it without the work (suppression, config, skipped tests, a helper that launders the forbidden thing), check whether that happened, and count escape hatches before and after. A quiet linter is not evidence of the work the rule exists for.
+
 ## Scenarios (holdouts the maker never saw)
 - `verified` on a scenario names the executed check that exercised it (`--check <id>`). Reading a diff proves shape, not behaviour: grade `manual_confirmation_required` and say what a human must try.
 - One grade per scenario with its OWN evidence: the test or command that exercised that scenario and the observed result. The runtime refuses evidence shared between scenarios.
