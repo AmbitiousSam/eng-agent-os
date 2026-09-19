@@ -153,3 +153,11 @@ overreached; past sessions cost an extra query; human to accept or ask) and left
 committed. Final message opens "The task is not finished."
 No EAOS change needed. Observation only: nothing in the runtime stops a lead re-recording a checker's `failed`
 as `verified` on the same code; this lead did not try.
+
+### Run 15, resolution (four hours later, same chat)
+Human accepted the narrower scope. The lead recorded it as a board decision (B-003: "Human accepted B-002 ...
+AC-3 reworded, id unchanged"), then **spawned a second `eaos-checker`** rather than re-grading its own work; that
+checker re-ran the tests and recorded AC-3 `verified`. `finish` closed the task **conditional-manual**: the three
+mobile items stay `manual_confirmation_required` because nobody has looked at 375px. Audit clean, 2 spawns
+counted, nothing committed. This also answers the open observation from the first half: given the chance to
+overwrite a checker's `failed`, the lead routed the re-grade through a fresh checker.
