@@ -180,3 +180,22 @@ Acceptance checker found 2 integration bugs all item checkers passed (PREP never
 
 ## 2026-09-20 — v4.5.8: the lesson became a gate
 Siva: will this happen again? Turned the memory rule into tests: TestWhatTheLeadSeesAgrees (spawn output == status == packet == goal next, audit clean, through a whole goal; blocked item shown with way out). It immediately found a 4th defect: audit flagged every properly unblocked task. Fixed.
+
+## 2026-09-20 — SESSION RECAP (2026-09-18 to 09-20): v4.0 -> v4.5.8, 17 real runs
+**Shipped:** repo collapsed to `eaos/` + `tests/` + `lab/` (122 -> ~75 files); one-step `install.sh`; global skill for
+Cursor/Codex generated from the one front door; `--uninstall` for every version; MIT; README with Mermaid flows.
+Runtime: goal level (locked intent R-n/A-n, items serve requirements, acceptance of the whole), `finish`, unit
+`--criterion` drift checks, guard hook (scenario store + pen), executed check required when code changed
+(`start_snapshot`), scenario `verified` needs `--check <id>`, LATE scenarios, metric-gaming rule for the checker,
+dynamic spawn budget, goal-time spawns charged to the item, live budget in `goal next`/packet, unblock without a phase.
+**Built and deleted:** headless `checker run` + `drain` + paste packet (v4.4.0) — premise "Cursor has no subagents" was
+never checked and was wrong; removed in v4.5.0.
+**Decisions:** one product with two levels (a separate "factory" project rejected after Siva tested me on it); hosts own
+their subagents; local gates are the bar, CI deleted; distribution is last, EAOS is a personal tool.
+**My mistakes, recorded as memory rules:** steering synergina's backlog; chasing CI; building around an unverified host
+limitation; shipping a runtime change after replaying only the changed verb (three stalls in the first real goal);
+releasing before reading the doctor's output (front door 5 tokens over budget; now gate-enforced); claiming the goal
+"unstuck itself" when Siva had to nudge it.
+**Evidence highlights:** run 15 checker failed a criterion against the lead's own spec and the lead routed the re-grade
+through a second checker; run 17 goal acceptance caught two integration defects every item check had passed.
+**Next:** fresh-session brainstorm on EAOS's core foundations (see now.md).
